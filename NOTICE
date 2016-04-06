@@ -1,0 +1,8 @@
+Modo VDBVoxel Plugin.
+Copyright 2015 The Foundry Visionmongers Ltd.
+
+This software Licensed under the Apache License, Version 2.0 (the "License") http://www.apache.org/licenses/LICENSE-2.0. You can see also the License file.
+
+The source code also includes openvdb/RenderModules.h, of which the code is developed at Mozilla Public License 2.0 ( http://www.mozilla.org/MPL/2.0/), from the OpenVDB 3.0 (http://www.openvdb.org).
+
+Developers who wish to contribute their code to this software must complete the Contributor License Agreement (CLA file) firstly and submit the file to The Foundry.
