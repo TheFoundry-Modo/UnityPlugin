@@ -1,4 +1,4 @@
-# UnityPlugin
+# Unity Plugin
 Modo 10's Unity editor plugin (for loading of PBR materials / textures)
 
 
@@ -9,7 +9,6 @@ Put the [**MODOMaterialImporter.cs**](https://github.com/TheFoundry-Modo/UnityPl
 
 You're good to go!
 
-
-#Help
+#Help & Documentation
 
 Check the [**MODO Material Importer.pdf**](https://github.com/TheFoundry-Modo/UnityPlugin/blob/master/MODO Material Importer.pdf) file for help.
