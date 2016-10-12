@@ -1,4 +1,4 @@
-﻿#if UNITY_5
+﻿#if UNITY_5_0 || UNITY_5_3_OR_NEWER
 #define MODO_COMPATIBLE_UNITY_VERSION
 #else
 #undef MODO_COMPATIBLE_UNITY_VERSION
@@ -6,16 +6,74 @@
 
 using UnityEditor;
 using UnityEngine;
+using System;
 using System.Linq;
 using System.IO;
 using System.Collections.Generic;
 using System.Xml.Serialization;
+using System.Reflection;
 
 
 #if MODO_COMPATIBLE_UNITY_VERSION
 /*
+ * RESULTING TEXTURE HOLDER
+ */
+public class MODOTexture
+{
+	public Material material;
+	public Texture texture;
+	public string path;
+	public string slot;
+	public string name;
+	public MODOChannel channel;
+	public MODOColorspace colorspace;
+
+	public MODOTexture (
+		Material material = null,
+		Texture texture = null,
+		string path = null,
+		string slot = null,
+		string name = null,
+		MODOChannel channel = MODOChannel.RGB,
+		MODOColorspace colorspace = MODOColorspace.sRGB)
+	{
+		this.material = material;
+		this.texture = texture;
+		this.path = path;
+		this.slot = slot;
+		this.name = name;
+		this.channel = channel;
+		this.colorspace = colorspace;
+	}
+}
+
+/*
 * PENDING TEXTURE CLASSES
 */
+
+// UV Maps.
+public enum MODOChannel
+{
+	RGB,
+	Red,
+	Green,
+	Blue,
+	Alpha
+}
+
+// UV Maps.
+public enum MODOUVMap
+{
+	UV1,
+	UV2
+}
+
+// Colorspaces.
+public enum MODOColorspace
+{
+	sRGB,
+	linear
+}
 
 // States for pending textures.
 public enum MODOPendingState
@@ -28,10 +86,9 @@ public enum MODOPendingState
 // Holds the information for a pending texture.
 public class MODOMaterialPendingTexture
 {
-	public Material			material;
-	public string			texturePath;
-	public string			textureSlot;
-	public MODOPendingState	state = MODOPendingState.Pending;
+	//public Material material;
+	public MODOTexture texture;
+	public MODOPendingState state = MODOPendingState.Pending;
 }
 
 /* Holds the pending textures - textures that have been copied
@@ -41,96 +98,115 @@ public class MODOMaterialPendingTexture
 public class MODOMaterialPendingTextureContainer
 {
 	// All the pending textures.
-	List<MODOMaterialPendingTexture> pending = new List<MODOMaterialPendingTexture> ();
+	List<MODOMaterialPendingTexture> pending = new List<MODOMaterialPendingTexture>();
 
 	// Predicate to find pending textures that are ready to apply.
-	private static bool isReadyToApply (MODOMaterialPendingTexture obj) {
+	static bool isReadyToApply(MODOMaterialPendingTexture obj)
+	{
 		return (obj.state == MODOPendingState.ReadyToApply);
 	}
 
 	// Predicate to find pending textures that were applied, successful or otherwise.
-	private static bool applied (MODOMaterialPendingTexture obj) {
+	static bool applied(MODOMaterialPendingTexture obj)
+	{
 		return (obj.state == MODOPendingState.Applied);
 	}
 
 	// Add a new pending texture.
 	// Only if it hasn't been added already.
 	// Force may be set to true to overwrite an existing pending texture if it's already added.
-	public bool addPendingTexture (Material material, string texturePath, string textureSlot, bool force=false) {
-		int index = pending.FindIndex(pendingTexture => string.Compare(pendingTexture.textureSlot, textureSlot) == 0 && pendingTexture.material == material);
-		if (index == -1) {
+	public bool addPendingTexture(Material material, MODOTexture texture, bool force = false)
+	{
+		int index = pending.FindIndex(pendingTexture => ((material == pendingTexture.texture.material) && (texture.slot == pendingTexture.texture.slot)));
+		if (index == -1)
+		{
 			MODOMaterialPendingTexture newPending = new MODOMaterialPendingTexture();
-			newPending.material = material;
-			newPending.texturePath = texturePath;
-			newPending.textureSlot = textureSlot;
+			newPending.texture = texture;
 			pending.Add(newPending);
 			return true;
 		}
-		else if (force) {
-			pending[index].texturePath = texturePath;
+		else if (force)
+		{
+			pending[index].texture = texture;
 			return true;
 		}
 		return false;
 	}
 
 	// Get all the pending textures with this texture path.
-	public List<MODOMaterialPendingTexture> getPendingTextures (string texturePath) {
-		return pending.FindAll (pendingTexture => string.Compare(pendingTexture.texturePath,texturePath, true) == 0);
+	public List<MODOMaterialPendingTexture> getPendingTextures(string texturePath)
+	{
+		return pending.FindAll(pendingTexture => (texturePath == pendingTexture.texture.path));
 	}
 
 	// Get all the pending textures with this material.
-	public List<MODOMaterialPendingTexture> getPendingTextures (Material material) {
-		return pending.FindAll(pendingTexture => pendingTexture.material == material);
+	public List<MODOMaterialPendingTexture> getPendingTextures(Material material)
+	{
+		return pending.FindAll(pendingTexture => (material == pendingTexture.texture.material));
+	}
+
+	// Get all the pending textures with this material.
+	public List<MODOMaterialPendingTexture> getPendingTextures()
+	{
+		return pending;
 	}
 
 	// Apply all the newly imported textures to their materials.
-	public void applyTexture () {
-		foreach (MODOMaterialPendingTexture pendingTexture in pending.FindAll(isReadyToApply)) {
-			if (pendingTexture.material != null) {
-				Texture texture = AssetDatabase.LoadAssetAtPath (pendingTexture.texturePath, typeof (Texture)) as Texture;
-				if (texture != null) {
-					pendingTexture.material.SetTexture (pendingTexture.textureSlot, texture);
-					EditorUtility.SetDirty (pendingTexture.material);
+	public void applyTexture()
+	{
+		foreach (MODOMaterialPendingTexture pendingTexture in pending.FindAll(isReadyToApply))
+		{
+			if (pendingTexture.texture.material != null)
+			{
+				Texture texture = AssetDatabase.LoadAssetAtPath(pendingTexture.texture.path, typeof(Texture)) as Texture;
+				if (texture != null)
+				{
+					pendingTexture.texture.material.SetTexture(pendingTexture.texture.slot, texture);
+					EditorUtility.SetDirty(pendingTexture.texture.material);
 
 					// If this is getting applied as a normal map, enable normal mapping.
-					if ((pendingTexture.textureSlot == "_BumpMap") || (pendingTexture.textureSlot == "_DetailNormalMap")) {
-						pendingTexture.material.EnableKeyword ("_NORMALMAP");
+					if ((pendingTexture.texture.slot == "_BumpMap") || (pendingTexture.texture.slot == "_DetailNormalMap"))
+					{
+						pendingTexture.texture.material.EnableKeyword("_NORMALMAP");
 					}
 
 					// If this is getting applied as a parallax map, enable parallax mapping.
-					if (pendingTexture.textureSlot == "_ParallaxMap") {
-						pendingTexture.material.EnableKeyword ("_PARALLAXMAP");
+					if (pendingTexture.texture.slot == "_ParallaxMap")
+					{
+						pendingTexture.texture.material.EnableKeyword("_PARALLAXMAP");
 					}
 
 					// If this is getting applied as a parallax map, enable parallax mapping.
-					if (pendingTexture.textureSlot == "_ParallaxMap") {
-						pendingTexture.material.EnableKeyword ("_PARALLAXMAP");
+					if (pendingTexture.texture.slot == "_ParallaxMap")
+					{
+						pendingTexture.texture.material.EnableKeyword("_PARALLAXMAP");
 					}
 
 					// If this is getting applied as a specular map, enable specular workflow.
-					if (pendingTexture.textureSlot == "_SpecGlossMap") {
-						pendingTexture.material.EnableKeyword ("_SPECGLOSSMAP");
+					if (pendingTexture.texture.slot == "_SpecGlossMap")
+					{
+						pendingTexture.texture.material.EnableKeyword("_SPECGLOSSMAP");
 					}
 
 					// If this is getting applied as a metallic map, enable metallic workflow.
-					if (pendingTexture.textureSlot == "_MetallicGlossMap") {
-						pendingTexture.material.EnableKeyword ("_METALLICGLOSSMAP");
+					if (pendingTexture.texture.slot == "_MetallicGlossMap")
+					{
+						pendingTexture.texture.material.EnableKeyword("_METALLICGLOSSMAP");
 					}
 
 					// If this is getting applied as a detail map, enable detail mapping.
-					if ((pendingTexture.textureSlot == "_DetailAlbedoMap") || (pendingTexture.textureSlot == "_DetailNormalMap")) {
-						pendingTexture.material.EnableKeyword ("_DETAIL_MULX2");
+					if ((pendingTexture.texture.slot == "_DetailAlbedoMap") || (pendingTexture.texture.slot == "_DetailNormalMap"))
+					{
+						pendingTexture.texture.material.EnableKeyword("_DETAIL_MULX2");
 					}
 				}
 			}
 			pendingTexture.state = MODOPendingState.Applied;
 		}
 
-		pending.RemoveAll (applied);
+		pending.RemoveAll(applied);
 
-		if (pending.Count == 0) {
-			AssetDatabase.Refresh ();
-		}
+		AssetDatabase.Refresh();
 	}
 }
 #endif
@@ -143,123 +219,159 @@ public class MODOMaterialPendingTextureContainer
 
 // Holds the information about a material property's texture.
 // Loaded from XML.
-public class MODOMaterialPropertyTexture {
+public class MODOMaterialPropertyTexture
+{
 	[XmlAttribute("name")]
-	public string name;
+	public string name = null;
 
 	[XmlAttribute("filename")]
-	public string filename;
+	public string filename = null;
 
 	[XmlAttribute("channel")]
-	public string channel;
+	public MODOChannel channel = MODOChannel.RGB;
 
 	[XmlAttribute("wrapU")]
-	public string wrapU;
+	public float wrapU = 1.0f;
 
 	[XmlAttribute("wrapV")]
-	public string wrapV;
+	public float wrapV = 1.0f;
 
 	[XmlAttribute("uvmap")]
-	public string uvmap;
+	public MODOUVMap uvmap = MODOUVMap.UV1;
 
-	#if MODO_COMPATIBLE_UNITY_VERSION
-	public Vector2 getWrapUV (Vector2 inScale) {
-		float[] floatValues = new float[4];
-		int floatCount = 0;
-		Vector2 scale = new Vector2 (inScale.x, inScale.y);
-		if (wrapU != null) {
-			MODOMaterialImporter.parseNumericValue (wrapU, floatValues, out floatCount);
-			if (floatCount == 1) {
-				scale = new Vector2(floatValues[0], scale.y);
-			}
-		}
-		if (wrapV != null) {
-			MODOMaterialImporter.parseNumericValue (wrapV, floatValues, out floatCount);
-			if (floatCount == 1) {
-				scale = new Vector2(scale.x, floatValues[0]);
-			}
-		}
-		return scale;
+	[XmlAttribute("fileIndex")]
+	public int imageIndex = -1;
+
+	[XmlAttribute("uvindex")]
+	public int uvIndex = -1;
+
+	[XmlAttribute("uvname")]
+	public string uvName = null;
+
+#if MODO_COMPATIBLE_UNITY_VERSION
+	public Vector2 getWrapUV(Vector2 inScale)
+	{
+		return new Vector2(wrapU, wrapV);
 	}
-	#endif
+#endif
 }
 
 // Holds the information about a material's property (values and a list of textures, if any).
 // Loaded from XML.
 public class MODOMaterialProperty
 {
-	[XmlAttribute ("name")]
+	[XmlAttribute("name")]
 	public string name;
 
-	[XmlAttribute ("value")]
+	[XmlAttribute("value")]
+	public string value_input
+	{
+		set
+		{
+			this.value = value;
+			vector = Vector4.zero;
+			float[] values = new float[4];
+			vectorCount = 0;
+			MODOMaterialImporter.parseNumericValue(value, values, out vectorCount);
+			for (int i = 0; i < vectorCount; i++)
+			{
+				vector[i] = values[i];
+			}
+		}
+		get
+		{
+			return value;
+		}
+	}
+
+	[XmlIgnore]
 	public string value;
+	[XmlIgnore]
+	public Vector4 vector = Vector4.zero;
+	[XmlIgnore]
+	public int vectorCount = 0;
 
 	[XmlElement("texture")]
 	public List<MODOMaterialPropertyTexture> textures = new List<MODOMaterialPropertyTexture>();
 
-	#if MODO_COMPATIBLE_UNITY_VERSION
-	public MODOMaterialPropertyTexture getTexture(string filename) {
+#if MODO_COMPATIBLE_UNITY_VERSION
+	public MODOMaterialPropertyTexture getTexture(string filename)
+	{
 		return textures.Find(property => property.filename == filename);
 	}
 
-	public int numTextures() {
+	public int numTextures()
+	{
 		return textures.Count();
 	}
-	#endif
+#endif
+}
+
+// Holds a list of all the texture files used in the material.
+// Loaded from XML.
+public class MODOImageContainer
+{
+	[XmlElement("file")]
+	public List<MODOImage> files = new List<MODOImage>();
+}
+
+// Holds the information about the images used by the materials.
+// Loaded from XML.
+public class MODOImage
+{
+	[XmlAttribute("color_correction")]
+	public MODOColorspace colorspace;
+
+	[XmlAttribute("filename")]
+	public string file;
 }
 
 // Holds the information about a material as well as it's properties.
 // Loaded from XML.
 public class MODOMaterial
 {
-	[XmlAttribute ("ID")]
+	[XmlAttribute("ID")]
 	public string ID;
 
-	[XmlAttribute ("ptag")]
+	[XmlAttribute("ptag")]
 	public string name;
 
-	[XmlAttribute ("type")]
+	[XmlAttribute("type")]
 	public string type;
 
-	[XmlElement ("property")]
-	public List<MODOMaterialProperty> properties = new List<MODOMaterialProperty> ();
+	[XmlElement("property")]
+	public List<MODOMaterialProperty> properties = new List<MODOMaterialProperty>();
 
 
-	#if MODO_COMPATIBLE_UNITY_VERSION
-	public MODOMaterialProperty getProperty (string name) {
-		return properties.Find (property => property.name == name);
+#if MODO_COMPATIBLE_UNITY_VERSION
+	public MODOMaterialProperty getProperty(string name)
+	{
+		return properties.Find(property => property.name == name);
 	}
 
-	// Return the emissive color.
-	public Color getDiffuseColor () {
+	// Return the diffuse color.
+	public Color getDiffuseColor()
+	{
 		Color diffuseColor = Color.white;
 
-		// If there's an albedo texture, then default to white.
-		// Otherwise use the albedo color, if it's there.
-		MODOMaterialProperty diffuseColorProperty = properties.Find (property => property.name == "Albedo");
-		if (diffuseColorProperty != null) {
-			if (diffuseColorProperty.value != null) {
-				float[] diffuseColorValues = new float[4];
-				int diffuseColorCount = 0;
-				MODOMaterialImporter.parseNumericValue (diffuseColorProperty.value, diffuseColorValues, out diffuseColorCount);
-				if (diffuseColorCount == 3) {
-					diffuseColor.r = diffuseColorValues [0];
-					diffuseColor.g = diffuseColorValues [1];
-					diffuseColor.b = diffuseColorValues [2];
-				}
+		MODOMaterialProperty diffuseColorProperty = properties.Find(property => property.name == "Albedo");
+		if (diffuseColorProperty != null)
+		{
+			if (diffuseColorProperty.vectorCount == 3)
+			{
+				diffuseColor.r = diffuseColorProperty.vector.x;
+				diffuseColor.g = diffuseColorProperty.vector.y;
+				diffuseColor.b = diffuseColorProperty.vector.z;
 			}
 		}
 
 		// Stick the opacity level into the alpha channel.
-		MODOMaterialProperty opacityProperty = properties.Find (property => property.name == "Opacity");
-		if (opacityProperty != null) {
-			if (opacityProperty.value != null) {
-				float[] opacityLevelValues = new float[4];
-				int opacityLevelCount = 0;
-				MODOMaterialImporter.parseNumericValue (opacityProperty.value, opacityLevelValues, out opacityLevelCount);
-				if (opacityLevelCount == 1) {
-					diffuseColor.a = opacityLevelValues [0];
-				}
+		MODOMaterialProperty opacityProperty = properties.Find(property => property.name == "Opacity");
+		if (opacityProperty != null)
+		{
+			if (opacityProperty.vectorCount == 1)
+			{
+				diffuseColor.a = opacityProperty.vector.x;
 			}
 		}
 
@@ -267,62 +379,55 @@ public class MODOMaterial
 	}
 
 	// Return the emissive color.
-	public Color getEmissiveColor () {
+	public Color getEmissiveColor()
+	{
 		// Get the color.
 		Color emissiveColor = Color.black;
 
-		// If there's an emissive texture, then default to white.
-		// Otherwise use the emissive color, if it's there.
-		MODOMaterialProperty emissiveColorProperty = properties.Find (property => property.name == "Emission");
-		if (emissiveColorProperty != null) {
-			if (emissiveColorProperty.value != null) {
-				float[] emissiveColorValues = new float[4];
-				int emissiveColorCount = 0;
-				MODOMaterialImporter.parseNumericValue (emissiveColorProperty.value, emissiveColorValues, out emissiveColorCount);
-				if (emissiveColorCount == 3) {
-					emissiveColor [0] = emissiveColorValues [0];
-					emissiveColor [1] = emissiveColorValues [1];
-					emissiveColor [2] = emissiveColorValues [2];
-				}
+		MODOMaterialProperty emissiveColorProperty = properties.Find(property => property.name == "Emission");
+		if (emissiveColorProperty != null)
+		{
+			if (emissiveColorProperty.vectorCount == 3)
+			{
+				emissiveColor.r = emissiveColorProperty.vector.x;
+				emissiveColor.g = emissiveColorProperty.vector.y;
+				emissiveColor.b = emissiveColorProperty.vector.z;
 			}
 		}
 
 		// Multiply the emissive color by the emissive level.
-		MODOMaterialProperty emissiveLevelProperty = properties.Find (property => property.name == "Emissive Level");
-		if (emissiveLevelProperty != null) {
-			if (emissiveLevelProperty.value != null) {
-				float[] emissiveLevelValues = new float[4];
-				int emissiveLevelCount = 0;
-				MODOMaterialImporter.parseNumericValue (emissiveLevelProperty.value, emissiveLevelValues, out emissiveLevelCount);
-				if (emissiveLevelCount == 1) {
-					// emissiveColor [0] *= emissiveLevelValues [0];
-					// emissiveColor [1] *= emissiveLevelValues [0];
-					// emissiveColor [2] *= emissiveLevelValues [0];
-					emissiveColor = emissiveColor * emissiveLevelValues [0];
-				}
+		MODOMaterialProperty emissiveLevelProperty = properties.Find(property => property.name == "Emissive Level");
+		if (emissiveLevelProperty != null)
+		{
+			if (emissiveLevelProperty.vectorCount == 1)
+			{
+				emissiveColor *= emissiveLevelProperty.vector.x;
 			}
 		}
 
 		return emissiveColor;
 	}
-	#endif
+#endif
 }
 
 // Holds the information about the version of MODO and exporter this XML came from.
 // Loaded from XML.
-public class MODOMaterialVersion {
+public class MODOMaterialVersion
+{
 	[XmlAttribute("app")]
-	public string app;
+	public string app; // Application the file came from.
 
 	[XmlAttribute("build")]
-	public int build;
+	public int build; // Application build number the file came from.
+
+	[XmlAttribute("xml_file_format")]
+	public int versionXML = 0; // Version of the XML format.
 
 	[XmlText]
-	public int version;
+	public int version; // Application version the file came from.
 }
 
 // Holds the materials in this asset.
-// Loaded from XML.
 [XmlRoot("catalog")]
 public class MODOMaterialContainer
 {
@@ -335,11 +440,24 @@ public class MODOMaterialContainer
 	[XmlElement("Version")]
 	public MODOMaterialVersion MODOversion;
 
-	[XmlElement ("Material")]
-	public List<MODOMaterial> materials = new List<MODOMaterial> ();
+	[XmlElement("Material")]
+	public List<MODOMaterial> materials = new List<MODOMaterial>();
 
-	public MODOMaterial getMaterial (string name) {
-		return materials.Find (mat => mat.name == name);
+	[XmlElement("ImageFiles")]
+	public MODOImageContainer images = new MODOImageContainer();
+
+	public MODOMaterial getMaterial(string name)
+	{
+		return materials.Find(mat => mat.name == name);
+	}
+
+	public bool useRoot()
+	{
+		if (useRootPath == 1)
+		{
+			return (!string.IsNullOrEmpty(rootPath));
+		}
+		return false;
 	}
 }
 
@@ -347,22 +465,27 @@ public class MODOMaterialContainer
 * ASSET POSTPROCESSOR
 */
 
-public class MODOMaterialImporter : AssetPostprocessor {
+public class MODOMaterialImporter : AssetPostprocessor
+{
 
 	/*
 	* XML LOADERS
 	*/
 
-	static MODOMaterialContainer LoadMaterialXMLFromStringReader (StringReader stringReader)
+	static MODOMaterialContainer LoadMaterialXMLFromStringReader(StringReader stringReader)
 	{
 		MODOMaterialContainer matContainer = null;
 		XmlSerializer serializer = new XmlSerializer(typeof(MODOMaterialContainer));
+
+		//serializer.UnknownAttribute += new XmlAttributeEventHandler(MODOMaterialImporter.Serializer_UnknownAttribute);
+
 		try
 		{
-			matContainer = serializer.Deserialize (stringReader) as MODOMaterialContainer;
+			matContainer = serializer.Deserialize(stringReader) as MODOMaterialContainer;
 		}
-		catch (System.Exception e) {
-			if (e != null) {} // Stop Unity complaining about unused variables.
+		catch (System.Exception e)
+		{
+			if (e != null) { /*DebugLog(e.ToString());*/ } // Stop Unity complaining about unused variables.
 			matContainer = null;
 		}
 		return matContainer;
@@ -371,112 +494,164 @@ public class MODOMaterialImporter : AssetPostprocessor {
 	static MODOMaterialContainer LoadMaterialXMLFromString(string content)
 	{
 		MODOMaterialContainer matContainer = null;
-		if ((content != null) && (content != "")) {
-			matContainer = LoadMaterialXMLFromStringReader (new StringReader(content));
+		if (!string.IsNullOrEmpty(content))
+		{
+			matContainer = LoadMaterialXMLFromStringReader(new StringReader(content));
 		}
 		return matContainer;
 	}
 
-	static MODOMaterialContainer LoadMaterialXMLFromPath (string path)
+	static MODOMaterialContainer LoadMaterialXMLFromPath(string path)
 	{
 		MODOMaterialContainer matContainer = null;
 		TextAsset xmlAsset = AssetDatabase.LoadAssetAtPath(path, typeof(TextAsset)) as TextAsset;
-		if ((xmlAsset != null) && (xmlAsset.text != "")) {
-			matContainer = LoadMaterialXMLFromStringReader (new StringReader(xmlAsset.text));
+		if ((xmlAsset != null) && !string.IsNullOrEmpty(xmlAsset.text))
+		{
+			matContainer = LoadMaterialXMLFromStringReader(new StringReader(xmlAsset.text));
 		}
 		return matContainer;
 	}
 
-	#if MODO_COMPATIBLE_UNITY_VERSION
+#if MODO_COMPATIBLE_UNITY_VERSION
 
-	// Globals & Constants.
+
+	/*
+	* GLOBALS AND CONSTANTS
+	*/
+
 	string projectPath = Directory.GetCurrentDirectory();
 	const string materialDir = "Materials";
 	const string textureDir = "Textures";
 	const string shaderName = "Standard";
 
-	// Debug & User Options.
-	static private bool alwaysApply = EditorPrefs.GetBool("MODOMaterialAlwaysApply", true);
-	static private bool alwaysImport = EditorPrefs.GetBool("MODOMaterialAlwaysImport", false);
-	static private bool debug = EditorPrefs.GetBool("MODOMaterialDebug", false);
-	static void DebugLog (string message) {
-		if (debug) {
-			Debug.Log ("MODO Material Importer\n" + message);
+
+	/*
+	* DEFAULT PREFERENCES
+	*/
+
+	static bool pref_alwaysApply = EditorPrefs.GetBool("MODOMaterialAlwaysApply", true);
+	static bool pref_alwaysImport = EditorPrefs.GetBool("MODOMaterialAlwaysImport", false);
+	static bool pref_debug = EditorPrefs.GetBool("MODOMaterialDebug", false);
+	static bool pref_showWarnings = EditorPrefs.GetBool("MODOMaterialShowWarnings", true);
+	static void DebugLog(string message)
+	{
+		if (pref_debug)
+		{
+			Debug.Log("MODO Material Importer\n" + message);
 		}
 	}
+	static void DebugWarning(string message)
+	{
+		Debug.LogWarning("MODO Material Importer\n" + message + "\n");
+	}
 
-	// Check if this is using the required Unity version.
-	static private bool UnityVersionMin (int min) {
-		string majorVerStr = Application.unityVersion.Split('.')[0];
+
+	/*
+	* UNITY VERSION CHECK
+	*/
+
+	// Check which version of Unity this is.
+	static int UnityVersionMajor()
+	{
 		int majorVer = 0;
-		if (int.TryParse (majorVerStr, out majorVer)) {
-			return (majorVer >= min);
+		string[] verStr = Application.unityVersion.Split('.');
+		if ((verStr.Length > 0) && int.TryParse(verStr[0], out majorVer))
+		{
+			return majorVer;
 		}
-		return false;
+		return majorVer;
 	}
-	static bool isUnity5 = UnityVersionMin (5);
 
-	static MODOMaterialPendingTextureContainer pendingTextures = new MODOMaterialPendingTextureContainer ();
+	static int UnityVersionMinor()
+	{
+		int minorVer = 0;
+		string[] verStr = Application.unityVersion.Split('.');
+		if ((verStr.Length > 1) && int.TryParse(verStr[1], out minorVer))
+		{
+			return minorVer;
+		}
+		return minorVer;
+	}
 
+	static bool isAtLeastUnity5 = (UnityVersionMajor() >= 5);
+	static bool isAtLeastUnity5_4 = ((UnityVersionMajor() >= 5) && (UnityVersionMinor() >= 4));
+
+	static MODOMaterialPendingTextureContainer pendingTextures = new MODOMaterialPendingTextureContainer();
+
+
+
+	/*
+	* MATERIAL PARAMETER MAPPING
+	*/
+
+	// Structure for holding the mapping from MODO Material parameters to Unity material slots.
+	// Null value for tSlot, sSlot means it shouldn't be applied there.
+	// If both are present, then sSlot gets filled only if a texture isn't found.
+	// Null texture channel means it wants to read from RGBA so specific channel isn't required.
 	struct MaterialParameter
 	{
-		private readonly string m_property;
-		private readonly string m_slot;
-		private readonly string m_valueSlot;
-		private readonly string m_channel;
+		public string name;         // MODO material parameter name.
+		public string tSlot;      // Shader parameter the texture should go into.
+		public string sSlot;        // Shader parameter the numeric value should go into.
+		public MODOChannel channel;   // Channel of the texture that Unity will attempt to read from.
 
-		public MaterialParameter (string property, string slot=null, string valueSlot=null, string channel=null)
+		public MaterialParameter(
+			string name = null,
+			string tSlot = null,
+			string sSlot = null,
+			MODOChannel channel = MODOChannel.RGB)
 		{
-			m_property = property;
-			m_slot = slot;
-			m_valueSlot = valueSlot;
-			m_channel = channel;
+			this.name = name;
+			this.tSlot = tSlot;
+			this.sSlot = sSlot;
+			this.channel = channel;
 		}
-
-		public string Property { get { return m_property; } }
-		public string Slot { get { return m_slot; } }
-		public string ValueSlot { get { return m_valueSlot; } }
-		public string Channel { get { return m_channel; } }
 	}
 
-	// Map the MODO material properties to Unity shader slots.
-	static readonly List<MaterialParameter> materialParameters = new List<MaterialParameter>
+	// Map MODO material properties to Unity shader slots.
+	static readonly List<MaterialParameter> materialParams = new List<MaterialParameter>
 	(new[] {
-			//						MODO Property			Unity Texture Slot		Unity Scalar Slot			Channel
-			new MaterialParameter ("Albedo",				"_MainTex",				null,						null),
-			new MaterialParameter ("Normal",				"_BumpMap",				null,						null),
-			new MaterialParameter ("Normal Scale",			null,					"_BumpScale",				null),
-			new MaterialParameter ("Ambient Occlusion",		"_OcclusionMap",		null,						"Green"),
-			new MaterialParameter ("Emission",				"_EmissionMap",			null,						null),
+			//						MODO Parameter Name		Unity Texture Slot		Unity Scalar Slot			Texture Channel
+			new MaterialParameter ("Albedo",                "_MainTex",             null,                       MODOChannel.RGB),
+			new MaterialParameter ("Normal",                "_BumpMap",             null,                       MODOChannel.RGB),
+			new MaterialParameter ("Normal Scale",          null,                   "_BumpScale",               MODOChannel.RGB),
+			new MaterialParameter ("Ambient Occlusion",     "_OcclusionMap",        null,                       MODOChannel.Green),
+			new MaterialParameter ("Emission",              "_EmissionMap",         null,                       MODOChannel.RGB),
 			//Emissive level is pre-multiplied into the emission color further up.
-			//new MaterialParameter ("Emissive Level",		null,					"_EmissionColor",			null),
-			new MaterialParameter ("Detail Mask",			"_DetailMask",			null,						"Alpha"),
-			new MaterialParameter ("Detail Albedo x2",		"_DetailAlbedoMap",		null,						null),
-			new MaterialParameter ("Detail Normal",			"_DetailNormalMap",		null,						null),
-			new MaterialParameter ("Detail Normal Scale",	null,					"_DetailNormalMapScale",	null),
-			new MaterialParameter ("Metallic",              "_MetallicGlossMap",	"_Metallic",				"Red"),
-			new MaterialParameter ("Bump",					"_ParallaxMap",			null,						"Green"),
-			new MaterialParameter ("Height Scale",			null,					"_Parallax",				null),
-			new MaterialParameter ("Smoothness",            "_MetallicGlossMap",	"_Glossiness",				"Alpha")
+			//new MaterialParameter ("Emissive Level",		null,					"_EmissionColor",			MODOChannel.RGB),
+			new MaterialParameter ("Detail Mask",           "_DetailMask",          null,                       MODOChannel.Alpha),
+			new MaterialParameter ("Detail Albedo x2",      "_DetailAlbedoMap",     null,                       MODOChannel.RGB),
+			new MaterialParameter ("Detail Normal",         "_DetailNormalMap",     null,                       MODOChannel.RGB),
+			new MaterialParameter ("Detail Normal Scale",   null,                   "_DetailNormalMapScale",    MODOChannel.RGB),
+			new MaterialParameter ("Metallic",              "_MetallicGlossMap",    "_Metallic",                MODOChannel.Red),
+			new MaterialParameter ("Bump",                  "_ParallaxMap",         null,                       MODOChannel.Green),
+			new MaterialParameter ("Height Scale",          null,                   "_Parallax",                MODOChannel.RGB),
+			new MaterialParameter ("Smoothness",            "_MetallicGlossMap",    "_Glossiness",              MODOChannel.Alpha)
 	});
 
-	/*string allForwardSlashes (string path) {
-		return path.Replace (Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-	}*/
 
-	public static string NormalizePath (string path) {
+
+	/*
+	* FILE PATH HANDLING
+	*/
+
+	public static string NormalizePath(string path)
+	{
 		return path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).Replace(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
 	}
 
 	// Given a directory path, return a list of all of the directories leading up to it.
 	// Ordered from the furthest up to the directory itself.
-	List<string> recurseDirectories (string directory) {
-		List<string> directoryList = new List<string> ();
+	List<string> recurseDirectories(string directory)
+	{
+		List<string> directoryList = new List<string>();
 		char[] separators = { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar };
 		string[] pathParts = directory.Split(separators);
-		for (int numParts = pathParts.Length; numParts > 0; numParts--) {
+		for (int numParts = pathParts.Length; numParts > 0; numParts--)
+		{
 			string temp_path = pathParts[0];
-			for (int i = 1; i<numParts; i++) {
+			for (int i = 1; i < numParts; i++)
+			{
 				temp_path = Path.Combine(temp_path, pathParts[i]);
 			}
 			directoryList.Add(temp_path);
@@ -484,16 +659,24 @@ public class MODOMaterialImporter : AssetPostprocessor {
 		return directoryList;
 	}
 
+
+	/*
+	* STRING TO FLOAT/VECTOR PARSING
+	*/
+
 	// Given a string, attempt to parse it into an array of floats.
 	// Return success state, with output filled with the values and outputCount filled with the number of elements in the array.
-	public static bool parseNumericValue (string input, float[] output, out int outputCount) {
-		string[] splitStr = {", "};
-		string[] elements = input.Split (splitStr, System.StringSplitOptions.RemoveEmptyEntries);
+	public static bool parseNumericValue(string input, float[] output, out int outputCount)
+	{
+		string[] splitStr = { ", " };
+		string[] elements = input.Split(splitStr, System.StringSplitOptions.RemoveEmptyEntries);
 		int eleCount = Mathf.Min(elements.Length, output.Length);
 		bool success = false;
-		for (int e = 0; e < eleCount; e++) {
+		for (int e = 0; e < eleCount; e++)
+		{
 			success = float.TryParse(elements[e], out output[e]);
-			if (!success) {
+			if (!success)
+			{
 				break;
 			}
 		}
@@ -501,8 +684,14 @@ public class MODOMaterialImporter : AssetPostprocessor {
 		return success;
 	}
 
+
+	/*
+	* TEXTURE ASSET FINDING AND FILE LOADING
+	*/
+
 	// Given a texture filename and a list of paths, attempt to find an existing Texture asset that matches.
-	Texture findExistingTexture (List<string> pathsToAssetDirectory, string textureFile) {
+	Texture findExistingTexture(List<string> pathsToAssetDirectory, string textureFile)
+	{
 		Texture tex = null;
 
 		// Look in the Textures directory of each directory up to root Assets directory.
@@ -510,7 +699,8 @@ public class MODOMaterialImporter : AssetPostprocessor {
 		{
 			string test_assetPath = NormalizePath(Path.Combine(Path.Combine(test_path, textureDir), textureFile));
 			tex = AssetDatabase.LoadAssetAtPath(test_assetPath, typeof(Texture)) as Texture;
-			if (tex != null) {
+			if (tex != null)
+			{
 				return tex;
 			}
 		}
@@ -518,7 +708,7 @@ public class MODOMaterialImporter : AssetPostprocessor {
 		// Otherwise find any texture with this name in the entire project.
 
 		// AssetDatabase.FindAssets crashes here if this is a fresh import, so we need to do this manually until Unity fix it.
-		// This is the FindAssets path, leaving here for when the bug is fixed.
+		// This is the FindAssets code path, leaving here for when the bug is fixed.
 		/*
 		string textureName = Path.GetFileNameWithoutExtension (textureFile);
 		string[] guids = AssetDatabase.FindAssets ("\"" + textureName + "\"" + " t:texture");
@@ -531,60 +721,89 @@ public class MODOMaterialImporter : AssetPostprocessor {
 
 
 		// This is the annoying long-winded manual search.
-		string temp_path = Path.Combine ("Assets", textureDir);
-		tex = AssetDatabase.LoadAssetAtPath (NormalizePath(Path.Combine (temp_path, textureFile)), typeof(Texture)) as Texture;
-		if (tex != null) {
+		string temp_path = Path.Combine("Assets", textureDir);
+		tex = AssetDatabase.LoadAssetAtPath(NormalizePath(Path.Combine(temp_path, textureFile)), typeof(Texture)) as Texture;
+		if (tex != null)
+		{
 			return tex;
 		}
-		foreach (string d in Directory.GetDirectories ("Assets", "*", SearchOption.AllDirectories)) {
-			if (d.EndsWith (textureDir, System.StringComparison.CurrentCultureIgnoreCase)) {
+		foreach (string d in Directory.GetDirectories("Assets", "*", SearchOption.AllDirectories))
+		{
+			if (d.EndsWith(textureDir, StringComparison.CurrentCultureIgnoreCase))
+			{
 				continue;
 			}
-			temp_path = Path.Combine (d, textureDir);
-			tex = AssetDatabase.LoadAssetAtPath (NormalizePath(Path.Combine (temp_path, textureFile)), typeof(Texture)) as Texture;
-			if (tex != null) {
+			temp_path = Path.Combine(d, textureDir);
+			tex = AssetDatabase.LoadAssetAtPath(NormalizePath(Path.Combine(temp_path, textureFile)), typeof(Texture)) as Texture;
+			if (tex != null)
+			{
 				return tex;
 			}
 		}
 
-			// Otherwise return null.
+		// Otherwise return null.
 		return null;
 	}
 
 	// Given a MODOMaterialPropertyTexture, asset directory paths, texture root path, find that texture or load in the external one defined in the property.
-	Texture loadTextureFromProperty (MODOMaterialPropertyTexture matProp, List<string> pathsToAssetDirectory, string textureRootPath, bool force, out string texturePath) {
-		if (matProp.filename != null) {
-			string textureFile = Path.GetFileName (matProp.filename);
+	Texture loadTextureFromProperty(MODOMaterialContainer matContainer, MODOMaterialPropertyTexture matProp, List<string> pathsToAssetDirectory, string textureRootPath, bool force, out string texturePath, out MODOColorspace colorspace)
+	{
+		string textureFilename = null;
+		MODOColorspace textureColorspace = MODOColorspace.sRGB;
+
+		if ((matProp.imageIndex > -1) && (matContainer.images.files.Count > matProp.imageIndex))
+		{
+			if (!string.IsNullOrEmpty(matContainer.images.files[matProp.imageIndex].file))
+			{
+				textureFilename = matContainer.images.files[matProp.imageIndex].file;
+				textureColorspace = matContainer.images.files[matProp.imageIndex].colorspace;
+			}
+		}
+		colorspace = textureColorspace;
+
+		// Try and fall back to the XML version 0 filename.
+		/*if (string.IsNullOrEmpty(textureFilename) && !string.IsNullOrEmpty(matProp.filename)) {
+			textureFilename = matProp.filename;
+		}*/
+
+		if (!string.IsNullOrEmpty(textureFilename))
+		{
+			string textureFile = Path.GetFileName(textureFilename);
 			string assetDirectory = pathsToAssetDirectory[Mathf.Max(pathsToAssetDirectory.Count - 1, 0)];
 
 			// If the texture already exists (by Unity's search standards) use it.
 			Texture tex = findExistingTexture(pathsToAssetDirectory, textureFile);
-			if (!force && (tex != null)) {
-				texturePath = NormalizePath(AssetDatabase.GetAssetPath (tex));
+			if (!force && (tex != null))
+			{
+				texturePath = NormalizePath(AssetDatabase.GetAssetPath(tex));
 				return tex;
 			}
 
 			// Otherwise load in the texture from the absolute path, if it exists.
-			
+
 			// External file path.
-			string importPath = NormalizePath(Path.Combine(textureRootPath, matProp.filename));
+			string importPath = NormalizePath(Path.Combine(textureRootPath, textureFilename));
 
 			// Check that the extnernal texture file exists before we do anything.
-			if (File.Exists (importPath)) {
-				string importedDirectory = NormalizePath(Path.Combine (assetDirectory, "Textures"));
+			if (File.Exists(importPath))
+			{
+				string importedDirectory = NormalizePath(Path.Combine(assetDirectory, "Textures"));
 				// If the Textures directory doesn't exist, then create it.
-				if (!Directory.Exists (importedDirectory) && !AssetDatabase.IsValidFolder (importedDirectory)) {
-					importedDirectory = NormalizePath(AssetDatabase.GUIDToAssetPath (AssetDatabase.CreateFolder (assetDirectory, "Textures")));
+				if (!Directory.Exists(importedDirectory) && !AssetDatabase.IsValidFolder(importedDirectory))
+				{
+					importedDirectory = NormalizePath(AssetDatabase.GUIDToAssetPath(AssetDatabase.CreateFolder(assetDirectory, "Textures")));
 				}
 
 				// Get the path of where the imported file will wind up, relative to the project directory.
 				string importedFile = NormalizePath(Path.Combine(importedDirectory, textureFile));
 
-				if (importExternalFile(importPath, importedFile)) {
+				if (importExternalFile(importPath, importedFile))
+				{
 					AssetDatabase.ImportAsset(importedFile, ImportAssetOptions.ForceUpdate);
 					texturePath = importedFile;
 				}
-				else {
+				else
+				{
 					texturePath = null;
 				}
 				return null;
@@ -596,9 +815,10 @@ public class MODOMaterialImporter : AssetPostprocessor {
 
 	// Attempt to replace a file with another one.
 	// But don't bother if they point to the same file.
-	bool importExternalFile (string externalPath, string internalPath) {
+	bool importExternalFile(string externalPath, string internalPath)
+	{
 		// Check we're not trying to overwrite a file with itself.
-		if (string.Compare (NormalizePath(externalPath), NormalizePath(Path.Combine(projectPath, internalPath)), true) == 0)
+		if (NormalizePath(externalPath).Equals(NormalizePath(Path.Combine(projectPath, internalPath)), StringComparison.CurrentCultureIgnoreCase))
 		{
 			DebugLog("Trying to import " + externalPath + " but it's the same file as the target. Skipping.");
 			return false;
@@ -610,18 +830,31 @@ public class MODOMaterialImporter : AssetPostprocessor {
 		}
 	}
 
+
+	/*
+	* MATERIAL ASSET FINDING
+	*/
+
 	// Figure out the target material name, based on the user's import preferences for the mesh asset.
-	string getMaterialName (string modelName, ModelImporterMaterialName materialName, Material material) {
-		if (materialName == ModelImporterMaterialName.BasedOnMaterialName) {
+	string getMaterialName(string modelName, ModelImporterMaterialName materialName, Material material)
+	{
+		if (materialName == ModelImporterMaterialName.BasedOnMaterialName)
+		{
 			return material.name;
-		} else if (materialName == ModelImporterMaterialName.BasedOnModelNameAndMaterialName) {
+		}
+		else if (materialName == ModelImporterMaterialName.BasedOnModelNameAndMaterialName)
+		{
 			return (modelName + "-" + material.name);
-		} else if (materialName == ModelImporterMaterialName.BasedOnTextureName) {
-			Texture mainTex = material.GetTexture ("_MainTex");
-			if (mainTex != null) {
+		}
+		else if (materialName == ModelImporterMaterialName.BasedOnTextureName)
+		{
+			Texture mainTex = material.GetTexture("_MainTex");
+			if (mainTex != null)
+			{
 				return mainTex.name;
 			}
-			else {
+			else
+			{
 				return material.name;
 			}
 		}
@@ -629,39 +862,53 @@ public class MODOMaterialImporter : AssetPostprocessor {
 	}
 
 	// Check through the Assets directory to find if this material already exists.
-	string getMaterialPath (List<string> pathsToAssetDirectory, string importedMaterialFile, string importedMaterialName, ModelImporterMaterialSearch materialSearch, out bool materialAlreadyExists) {
+	string getMaterialPath(List<string> pathsToAssetDirectory, string importedMaterialFile, string importedMaterialName, ModelImporterMaterialSearch materialSearch, out bool materialAlreadyExists)
+	{
 		// Default to not already existing.
 		materialAlreadyExists = false;
 		string path = pathsToAssetDirectory[Mathf.Max(pathsToAssetDirectory.Count - 1, 0)];
 
-		if (materialSearch == ModelImporterMaterialSearch.Local) {
+		if (materialSearch == ModelImporterMaterialSearch.Local)
+		{
 			// Look just in the local Materials directory.
-			string temp_path = Path.Combine (path, materialDir);
-			if (AssetDatabase.LoadAssetAtPath (Path.Combine (temp_path, importedMaterialFile), typeof (Material))) {
+			string temp_path = Path.Combine(path, materialDir);
+			if (AssetDatabase.LoadAssetAtPath(Path.Combine(temp_path, importedMaterialFile), typeof(Material)))
+			{
 				materialAlreadyExists = true;
 			}
 			return temp_path;
-		} else if (materialSearch == ModelImporterMaterialSearch.RecursiveUp) {
+		}
+		else if (materialSearch == ModelImporterMaterialSearch.RecursiveUp)
+		{
 			// Look in the Materials directory of each directory up to root Assets directory.
 			// Fall back to the local Materials directory if not found.
-			foreach (string test_path in pathsToAssetDirectory) {
-				string temp_path = Path.Combine (test_path, materialDir);
-				if (AssetDatabase.LoadAssetAtPath (Path.Combine (temp_path, importedMaterialFile), typeof (Material))) {
+			foreach (string test_path in pathsToAssetDirectory)
+			{
+				string temp_path = Path.Combine(test_path, materialDir);
+				if (AssetDatabase.LoadAssetAtPath(Path.Combine(temp_path, importedMaterialFile), typeof(Material)))
+				{
 					materialAlreadyExists = true;
 					return temp_path;
 				}
 			}
-		} else if (materialSearch == ModelImporterMaterialSearch.Everywhere) {
+		}
+		else if (materialSearch == ModelImporterMaterialSearch.Everywhere)
+		{
 			// Look across the entire project for a material with this name, grab the first result.
 			// Fall back to the local Materials directory if not found.
-			string[] guids = AssetDatabase.FindAssets (importedMaterialName + " t:material", null);
-			if (guids.Length > 0) {
+			string[] guids = AssetDatabase.FindAssets(importedMaterialName + " t:material", null);
+			if (guids.Length > 0)
+			{
 				materialAlreadyExists = true;
-				return AssetDatabase.GUIDToAssetPath (guids[0]);
+				return AssetDatabase.GUIDToAssetPath(guids[0]);
 			}
 		}
-		return Path.Combine (path, materialDir);
+		return Path.Combine(path, materialDir);
 	}
+
+	/*
+	* MATERIAL KEYWORDS AND BLEND MODES
+	*/
 
 	// Set up the blend modes for the material.
 	// Copied from StandardShaderGUI.cs.
@@ -669,7 +916,7 @@ public class MODOMaterialImporter : AssetPostprocessor {
 	{
 		Opaque,
 		Cutout,
-		Fade,		// Old school alpha-blending mode, fresnel does not affect amount of transparency
+		Fade,       // Old school alpha-blending mode, fresnel does not affect amount of transparency
 		Transparent // Physically plausible transparency mode, implemented as alpha pre-multiply
 	}
 
@@ -677,72 +924,133 @@ public class MODOMaterialImporter : AssetPostprocessor {
 	// Copied from StandardShaderGUI.cs.
 	void SetupMaterialWithBlendMode(Material material, BlendMode blendMode)
 	{
+		// Hack because SetOverrideTag wasn't introduced until Unity 5.1
+		// but the version specific defines weren't introduced until 5.3
+		MethodInfo overrideTagMethod = typeof(Material).GetMethod("SetOverrideTag");
+
 		switch (blendMode)
 		{
-		case BlendMode.Opaque:
-			material.SetOverrideTag("RenderType", "");
-			material.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.One);
-			material.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.Zero);
-			material.SetInt("_ZWrite", 1);
-			material.DisableKeyword("_ALPHATEST_ON");
-			material.DisableKeyword("_ALPHABLEND_ON");
-			material.DisableKeyword("_ALPHAPREMULTIPLY_ON");
-			material.renderQueue = -1;
-			break;
-		case BlendMode.Cutout:
-			material.SetOverrideTag("RenderType", "TransparentCutout");
-			material.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.One);
-			material.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.Zero);
-			material.SetInt("_ZWrite", 1);
-			material.EnableKeyword("_ALPHATEST_ON");
-			material.DisableKeyword("_ALPHABLEND_ON");
-			material.DisableKeyword("_ALPHAPREMULTIPLY_ON");
-			material.renderQueue = 2450;
-			break;
-		case BlendMode.Fade:
-			material.SetOverrideTag("RenderType", "Transparent");
-			material.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
-			material.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
-			material.SetInt("_ZWrite", 0);
-			material.DisableKeyword("_ALPHATEST_ON");
-			material.EnableKeyword("_ALPHABLEND_ON");
-			material.DisableKeyword("_ALPHAPREMULTIPLY_ON");
-			material.renderQueue = 3000;
-			break;
-		case BlendMode.Transparent:
-			material.SetOverrideTag("RenderType", "Transparent");
-			material.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.One);
-			material.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
-			material.SetInt("_ZWrite", 0);
-			material.DisableKeyword("_ALPHATEST_ON");
-			material.DisableKeyword("_ALPHABLEND_ON");
-			material.EnableKeyword("_ALPHAPREMULTIPLY_ON");
-			material.renderQueue = 3000;
-			break;
+			case BlendMode.Opaque:
+				if (overrideTagMethod != null)
+					overrideTagMethod.Invoke(material, new object[] { "RenderType", "" });
+				material.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.One);
+				material.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.Zero);
+				material.SetInt("_ZWrite", 1);
+				material.DisableKeyword("_ALPHATEST_ON");
+				material.DisableKeyword("_ALPHABLEND_ON");
+				material.DisableKeyword("_ALPHAPREMULTIPLY_ON");
+				material.renderQueue = -1;
+				break;
+			case BlendMode.Cutout:
+				if (overrideTagMethod != null)
+					overrideTagMethod.Invoke(material, new object[] { "RenderType", "TransparentCutout" });
+				material.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.One);
+				material.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.Zero);
+				material.SetInt("_ZWrite", 1);
+				material.EnableKeyword("_ALPHATEST_ON");
+				material.DisableKeyword("_ALPHABLEND_ON");
+				material.DisableKeyword("_ALPHAPREMULTIPLY_ON");
+				material.renderQueue = 2450;
+				break;
+			case BlendMode.Fade:
+				if (overrideTagMethod != null)
+					overrideTagMethod.Invoke(material, new object[] { "RenderType", "Transparent" });
+				material.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
+				material.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+				material.SetInt("_ZWrite", 0);
+				material.DisableKeyword("_ALPHATEST_ON");
+				material.EnableKeyword("_ALPHABLEND_ON");
+				material.DisableKeyword("_ALPHAPREMULTIPLY_ON");
+				material.renderQueue = 3000;
+				break;
+			case BlendMode.Transparent:
+				if (overrideTagMethod != null)
+					overrideTagMethod.Invoke(material, new object[] { "RenderType", "Transparent" });
+				material.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.One);
+				material.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+				material.SetInt("_ZWrite", 0);
+				material.DisableKeyword("_ALPHATEST_ON");
+				material.DisableKeyword("_ALPHABLEND_ON");
+				material.EnableKeyword("_ALPHAPREMULTIPLY_ON");
+				material.renderQueue = 3000;
+				break;
 		}
 	}
 
-	Material OnAssignMaterialModel (Material material, Renderer renderer) {
-		if (!isUnity5) {
+	void SetupMaterialUseAlbedoAlpha(Material material, bool albedoAlpha)
+	{
+		if (isAtLeastUnity5_4)
+		{
+			if (albedoAlpha)
+			{
+				material.SetFloat("_SmoothnessTextureChannel", 1.0f);
+				material.EnableKeyword("_SMOOTHNESS_TEXTURE_ALBEDO_CHANNEL_A");
+			}
+			else
+			{
+				material.SetFloat("_SmoothnessTextureChannel", 0.0f);
+				material.DisableKeyword("_SMOOTHNESS_TEXTURE_ALBEDO_CHANNEL_A");
+			}
+		}
+	}
+
+	/*
+	* MATERIAL CREATION AND TEXTURE ASSIGNMENT
+	*/
+
+	Material OnAssignMaterialModel(Material material, Renderer renderer)
+	{
+		if (!isAtLeastUnity5)
+		{
 			return null;
 		}
 
 		// Check to see if there's an XML file to match with the FBX asset.
 		string xmlPath = NormalizePath(Path.Combine(Path.GetDirectoryName(assetPath), Path.GetFileNameWithoutExtension(assetPath) + ".xml"));
 		MODOMaterialContainer matContainer = LoadMaterialXMLFromPath(xmlPath);
-		if (matContainer == null) {
-			// Unity will default back to it's own usual methods if no material XML file exists.
+
+		bool pref_showWarnings = EditorPrefs.GetBool("MODOMaterialShowWarnings", true);
+
+		// If no XML material exists, return null and Unity will default back to it's own default methods of material loading.
+		if (matContainer == null)
+		{
+			DebugWarning("No XML file for material \"" + material.name + "\"found.");
 			return null;
 		}
 
+		string modelPath = NormalizePath(Path.Combine(Path.GetDirectoryName(xmlPath), Path.GetFileNameWithoutExtension(xmlPath) + ".fbx"));
+		if (AssetDatabase.LoadAssetAtPath(modelPath, typeof(GameObject)) == null)
+		{
+			DebugWarning("No FBX file for XML \"" + xmlPath + "\"found.");
+		}
+
 		// Here, the material XML file is valid and has been loaded.
+		// Get the tags on the file - this stores the per-file import preferences, if any.
+		bool xml_alwaysApply = EditorPrefs.GetBool("MODOMaterialAlwaysApply", true);
+		bool xml_alwaysImport = EditorPrefs.GetBool("MODOMaterialAlwaysImport", false);
+		TextAsset xmlAsset = AssetDatabase.LoadAssetAtPath(xmlPath, typeof(TextAsset)) as TextAsset;
+		string[] labels = AssetDatabase.GetLabels(xmlAsset);
+		if (labels.Length > 0)
+		{
+			foreach (string label in labels)
+			{
+				if (label.ToLowerInvariant() == "MODOAlwaysApply".ToLowerInvariant())
+					xml_alwaysApply = true;
+				if (label.ToLowerInvariant() == "MODOAlwaysImport".ToLowerInvariant())
+					xml_alwaysImport = true;
+				if (label.ToLowerInvariant() == "MODODontApply".ToLowerInvariant())
+					xml_alwaysApply = false;
+				if (label.ToLowerInvariant() == "MODODontImport".ToLowerInvariant())
+					xml_alwaysImport = false;
+			}
+		}
 
 		// First parse the paths to get some names and directories to search later.
 		// Get the mesh asset directory and name.
-		string assetDirectory			= Path.GetDirectoryName (assetPath);
+		string assetDirectory = Path.GetDirectoryName(assetPath);
 		DebugLog("Asset Directory: " + assetDirectory);
 
-		string assetName				= Path.GetFileNameWithoutExtension(assetPath);
+		string assetName = Path.GetFileNameWithoutExtension(assetPath);
 		DebugLog("Asset Name: " + assetName);
 
 		string textureRootPath = (matContainer.useRootPath == 1) ? matContainer.rootPath : Path.Combine(projectPath, assetDirectory);
@@ -752,12 +1060,12 @@ public class MODOMaterialImporter : AssetPostprocessor {
 		List<string> pathsToAssetDirectory = recurseDirectories(assetDirectory);
 
 		// Get the model's material search and name settings.
-		ModelImporter				modelImporter	= assetImporter as ModelImporter;
-		ModelImporterMaterialSearch	materialSearch	= modelImporter.materialSearch;
-		ModelImporterMaterialName	materialName	= modelImporter.materialName;
+		ModelImporter modelImporter = assetImporter as ModelImporter;
+		ModelImporterMaterialSearch materialSearch = modelImporter.materialSearch;
+		ModelImporterMaterialName materialName = modelImporter.materialName;
 
 		// Get the material name based on material name setting.
-		string importedMaterialName = getMaterialName (assetName, materialName, material);
+		string importedMaterialName = getMaterialName(assetName, materialName, material);
 
 		// Path to the material file itself (with extension).
 		string importedMaterialFile = importedMaterialName + ".mat";
@@ -765,216 +1073,376 @@ public class MODOMaterialImporter : AssetPostprocessor {
 		// The directory path (relative to the project root directory) of the material.
 		// Figure out the material directory path based on the Mesh's material search setting.
 		// The found variable is true if an existing material was found at that path. False if a material needs to be created.
-		bool   materialAlreadyExists = false;
-		string importedMaterialPath  = getMaterialPath (pathsToAssetDirectory, importedMaterialFile, importedMaterialName, materialSearch, out materialAlreadyExists);
+		bool materialAlreadyExists = false;
+		string importedMaterialPath = getMaterialPath(pathsToAssetDirectory, importedMaterialFile, importedMaterialName, materialSearch, out materialAlreadyExists);
 
 		// The full path to the material file (relative to the project root directory).
-		string materialPath = NormalizePath(Path.Combine (importedMaterialPath, importedMaterialFile));
+		string materialPath = NormalizePath(Path.Combine(importedMaterialPath, importedMaterialFile));
+
+		// Get the original name of the material it wants. We need this to get the material values from the XML.
+		// The material itself may have different name due to the import settings.
+		string matName = material.name;
 
 		// If there's a material here already and we're not always updating the values, just return that material.
-		if (AssetDatabase.LoadAssetAtPath (materialPath, typeof(Material))) {
-			material = AssetDatabase.LoadAssetAtPath (materialPath, typeof(Material)) as Material;
-			if (!alwaysApply) {
+		if (AssetDatabase.LoadAssetAtPath(materialPath, typeof(Material)))
+		{
+			material = AssetDatabase.LoadAssetAtPath(materialPath, typeof(Material)) as Material;
+			if (!xml_alwaysApply)
+			{
 				return material;
 			}
 		}
 
 		// Apply the PBR shader to the material if it's not already applied.
 		Shader pbrShader = Shader.Find(shaderName);
-		if ((pbrShader != null) && ((material.shader == null) || (material.shader != pbrShader))) {
+		if ((pbrShader != null) && ((material.shader == null) || (material.shader != pbrShader)))
+		{
 			material.shader = pbrShader;
 		}
 		// Check the shader has been properly applied, error out if not.
-		if (material.shader == null) {
-			DebugLog("Unable to find shader: " + shaderName);
+		if (material.shader == null)
+		{
+			DebugLog("Unable to find shader \"" + shaderName + "\".");
 			return null;
 		}
 
 		// Get the material definition from the material container.
-		MODOMaterial mat = matContainer.getMaterial (material.name);
-		if (mat == null) {
-			DebugLog("XML file has no definition for material" + material.name);
+		MODOMaterial mat = matContainer.getMaterial(matName);
+		if (mat == null)
+		{
+			DebugLog("XML file has no definition for material \"" + matName + "\".");
 			return null;
 		}
 
 		// Set diffuse color of the material.
 		// And if opacity is less than 1, then set the material blend mode to fade (z-primed transparent).
-		Color diffuseColor = mat.getDiffuseColor ();
-		material.SetColor ("_Color", diffuseColor);
-		DebugLog ("Setting " + mat.name + ": Color to " + diffuseColor);
-		if (diffuseColor.a < 1.0f) {
-			SetupMaterialWithBlendMode (material, BlendMode.Fade);
-			DebugLog ("Setting " + mat.name + ": to Fade.");
+		Color diffuseColor = mat.getDiffuseColor();
+		material.SetColor("_Color", diffuseColor);
+		DebugLog("Setting " + mat.name + ": Color to " + diffuseColor);
+		if (diffuseColor.a < 1.0f)
+		{
+			SetupMaterialWithBlendMode(material, BlendMode.Fade);
+			DebugLog("Setting " + mat.name + ": to Fade.");
 		}
 
 		// Set emissive color & level of the material.
-		Color emissiveColor = mat.getEmissiveColor ();
-		if (emissiveColor.maxColorComponent > (0.1f / 255.0f)) {
-			material.EnableKeyword ("_EMISSION");
+		Color emissiveColor = mat.getEmissiveColor();
+		if (Mathf.Max(emissiveColor.r, emissiveColor.g, emissiveColor.b) > (0.1f / 255.0f))
+		{
+			material.EnableKeyword("_EMISSION");
 		}
-		material.SetColor ("_EmissionColor", emissiveColor);
-		DebugLog ("Setting " + mat.name + ": Emission Color to " + emissiveColor);
+		material.SetColor("_EmissionColor", emissiveColor);
+		DebugLog("Setting " + mat.name + ": Emission Color to " + emissiveColor);
+
+		List<MODOTexture> finalTextures = new List<MODOTexture>();
+
+		// Store any warnings for this material.
+		List<string> warnings = new List<string>();
+		List<string> debugWarnings = new List<string>();
 
 		// For each material slot, load up the information for it.
 		// If there is no texture defined, fall back to the scalar/vector value.
 		// Any textures that need to be imported are added to a pending list to be applied after they've been imported.
-		foreach (MaterialParameter parameter in materialParameters) {
-			MODOMaterialProperty matProp = mat.getProperty (parameter.Property);
-			if (matProp == null) {
+		foreach (MaterialParameter parameter in materialParams)
+		{
+			MODOMaterialProperty matProp = mat.getProperty(parameter.name);
+			if (matProp == null)
+			{
 				continue;
 			}
 
 			// Attempt to load in a texture for the slot.
-			if (parameter.Slot != null) {
-				string texturePath = null;
-				string textureChannel = null;
-				Texture tex = null;
-
+			if (parameter.tSlot != null)
+			{
 				bool validTexture = false;
-				//bool skippedApplication = false;
 
-				// Iterate through each of the textures listed and find the first valid one.
-				foreach (MODOMaterialPropertyTexture matPropTexture in matProp.textures) {
-					tex = loadTextureFromProperty(matPropTexture, pathsToAssetDirectory, textureRootPath, alwaysImport, out texturePath);
+				MODOTexture finalTexture = new MODOTexture(material, null, null, parameter.tSlot, parameter.name, MODOChannel.RGB, MODOColorspace.sRGB);
 
-					// Texture doesn't exist yet, so import it.
-					if ((tex == null) && (texturePath != null)) {
-						if (pendingTextures.addPendingTexture(material, texturePath, parameter.Slot)) {
-							DebugLog("Deferred setting " + mat.name + ": " + matProp.name + " to " + texturePath);
-							textureChannel = matPropTexture.channel;
-						} else {
-							DebugLog(mat.name + ": " + matProp.name + " already has a texture waiting to be applied, skipping application of " + texturePath);
-							//skippedApplication = true;
-						}
-					}
+				// Iterate through each of the textures listed for this slot (there might be multiple textures) and find the first valid one.
+				foreach (MODOMaterialPropertyTexture matPropTexture in matProp.textures)
+				{
 
 					// Set up the wrap values for the main maps.
-					if (parameter.Property == "Albedo") {
-						Vector2 scale = matPropTexture.getWrapUV (material.GetTextureScale(parameter.Slot));
-						DebugLog("Setting " + mat.name + ": " + parameter.Property + " Wrap UV to (" + scale.x + ", " + scale.y + ").");
-						material.SetTextureScale(parameter.Slot, scale);
+					if (finalTexture.name == "Albedo")
+					{
+						Vector2 scale = matPropTexture.getWrapUV(material.GetTextureScale(finalTexture.slot));
+						DebugLog("Setting " + mat.name + ": " + finalTexture.name + " Wrap UV to (" + scale.x + ", " + scale.y + ").");
+						material.SetTextureScale(finalTexture.slot, scale);
 					}
 
 					// Set up the wrap values for the detail maps.
-					if (parameter.Property == "Detail Albedo x2") {
-						if (matPropTexture.uvmap != null) {
-							if (matPropTexture.uvmap == "UV1") {
-								material.SetFloat("_UVSec", 1.0f);
-								DebugLog("Setting " + mat.name + ": Secondary UV to UV1");
-							}
-							else {
-								material.SetFloat("_UVSec", 0.0f);
-								DebugLog("Setting " + mat.name + ": Secondary UV to UV0");
-							}
+					if (finalTexture.name == "Detail Albedo x2")
+					{
+						if (matPropTexture.uvmap != MODOUVMap.UV1)
+						{
+							material.SetFloat("_UVSec", 1.0f);
+							DebugLog("Setting " + mat.name + ": Secondary UV to UV1");
 						}
-						Vector2 scale = matPropTexture.getWrapUV (material.GetTextureScale(parameter.Slot));
-						DebugLog("Setting " + mat.name + ": " + parameter.Property + " Wrap UV to (" + scale.x + ", " + scale.y + ").");
-						material.SetTextureScale(parameter.Slot, scale);
+						else
+						{
+							material.SetFloat("_UVSec", 0.0f);
+							DebugLog("Setting " + mat.name + ": Secondary UV to UV0");
+						}
+						Vector2 scale = matPropTexture.getWrapUV(material.GetTextureScale(finalTexture.slot));
+						DebugLog("Setting " + mat.name + ": " + finalTexture.name + " Wrap UV to (" + scale.x + ", " + scale.y + ").");
+						material.SetTextureScale(finalTexture.slot, scale);
 					}
 
-					// Check to see if there are any conflicts with the Metallic/Smoothness maps.
-					// Users might assign them differently in MODO but Unity is much more fussy and wants
-					// them to be derived from the same texture.
-					if (parameter.Property == "Smoothness") {
-						string metalPath = null;
-
-						// Check to see if the material already has a metalness texture applied.
-						Texture metalTexture = material.GetTexture(parameter.Slot);
-
-						// A Metalness texture isn't already applied, so search the pending textures to see if there's one waiting to be applied.
-						if (metalTexture == null) {
-							foreach (MODOMaterialPendingTexture pendingTexture in pendingTextures.getPendingTextures(material)) {
-								if (pendingTexture.textureSlot == parameter.Slot) {
-									metalPath = pendingTexture.texturePath;
-									break;
-								}
-							}
-						}
-						else {
-							metalPath = AssetDatabase.GetAssetPath(metalTexture);
-						}
-
-						if (metalPath != null) {
-							if (tex != null) {
-								if (metalPath != AssetDatabase.GetAssetPath(tex)) {
-									// Metallic texture is set, but different smoothness texture is destined to be applied to the same slot.
-									Debug.LogWarning("MODO Material Importer\nThe textures specified for " + mat.name + "'s Metallic and Smoothness don't match!\nUnity expects to read the Metallic value from the red channel and Smoothness from the alpha channel of the same texture! Your results may not be as expected.");
-								}
-							}
-							else if (texturePath != null) {
-								if (string.Compare (metalPath, texturePath, true) != 0) {
-									// Metallic texture is set, but different smoothness texture is destined to be applied to the same slot.
-									Debug.LogWarning("MODO Material Importer\nThe textures specified for " + mat.name + "'s Metallic and Smoothness don't match!\nUnity expects to read the Metallic value from the red channel and Smoothness from the alpha channel of the same texture! Your results may not be as expected.");
-								}
-							}
-							else {
-								// Metallic texture is set, but no smoothness texture is set.
-								// Unity will ignore the scalar Smoothness value supplied by the user and read it from the alpha of the metallic texture.
-								Debug.LogWarning("MODO Material Importer\n" + mat.name + "'s Metallic value is being driven by a texture but Smoothness is not.\nUnity will attempt to read the smoothness value from the alpha channel of the Metallic texture, not the value specified! Your results may not be as expected.");
-							}
-						}
-						else if ((metalPath == null) && ((tex != null) || (texturePath != null))) {
-							// No metallic texture is set, but smoothness texture is destined to be applied to the same slot.
-							// Unity will ignore the scalar Metalness value supplied by the user and read it from the red of the metallic texture.
-							Debug.LogWarning("MODO Material Importer\n" + mat.name + "'s Smoothness value is being driven by a texture but Metalness is not.\nUnity will attempt to read the metallic value from the red channel of the Smoothness texture, not the value specified! Your results may not be as expected.");
-						}
-					}
-
-					if ((tex != null) || (texturePath != null)) {
+					finalTexture.texture = loadTextureFromProperty(matContainer, matPropTexture, pathsToAssetDirectory, textureRootPath, xml_alwaysImport, out finalTexture.path, out finalTexture.colorspace);
+					if ((finalTexture.texture != null) || (finalTexture.path != null))
+					{
 						// We found a texture.
 						validTexture = true;
-						if (tex != null) {
-							material.SetTexture(parameter.Slot, tex);
-							DebugLog("Setting " + mat.name + ": " + matProp.name + " to " + tex.name);
+						if (finalTexture.texture != null)
+						{
+							finalTexture.path = AssetDatabase.GetAssetPath(finalTexture.texture);
+							DebugLog("Setting " + mat.name + ": " + matProp.name + " to " + finalTexture.texture.name);
+						}
+						else
+						{
+							if (pendingTextures.addPendingTexture(material, finalTexture))
+							{
+								DebugLog("Deferred setting " + mat.name + ": " + matProp.name + " to " + finalTexture.path);
+								finalTexture.channel = matPropTexture.channel;
+							}
+							else
+							{
+								DebugLog(mat.name + ": " + matProp.name + " already has a texture waiting to be applied, skipping application of " + finalTexture.path);
+							}
 						}
 
 						// Alert the user if their texture channels are mis-wired.
-						if ((textureChannel != null) && (parameter.Channel != null)) {
-							if (string.Compare(textureChannel, parameter.Channel, true) != 0) {
-								Debug.LogWarning("MODO Material Importer\n" + mat.name + "'s " + parameter.Property + " texture value is being driven by the " + textureChannel + " channel of the texture.\nUnity wants to take it from the " + parameter.Channel + " channel! Your results may not be as expected.");
-							}
+						if (finalTexture.channel != parameter.channel)
+						{
+							if (pref_showWarnings)
+								warnings.Add(finalTexture.name + " texture is assigned to the wrong texture channel (currently " + finalTexture.channel + ", Unity wants it in " + parameter.channel + ").");
+							debugWarnings.Add(mat.name + "'s " + finalTexture.name + " value is being driven by the " + finalTexture.channel + " channel of the " + finalTexture.name + " texture.\nUnity expects it to be in the " + parameter.channel + " channel.");
 						}
+
 						break;
 					}
 				}
 
-				if (!validTexture) {
-					material.SetTexture (parameter.Slot, null);
-					DebugLog("Clearing texture for " + mat.name + ": " + parameter.Slot);
+				if (!validTexture)
+				{
+					finalTexture.texture = null;
+					finalTexture.path = null;
+					material.SetTexture(finalTexture.slot, null);
+					DebugLog("Clearing texture for " + mat.name + ": " + finalTexture.name + " (" + finalTexture.slot + ")");
 				}
+
+				finalTextures.Add (finalTexture);
 			}
 
 			// Fill the scalar value slot, if it has one.
-			if (parameter.ValueSlot != null) {
-				if (matProp.value != null) {
-					float[] floatValues = new float[4];
-					int floatCount = 0;
-					parseNumericValue (matProp.value, floatValues, out floatCount);
-					if (floatCount == 1) {
-						// Scalar channel.
-						DebugLog ("Setting " + mat.name + ": " + matProp.name + " to " + floatValues[0]);
-						material.SetFloat (parameter.ValueSlot, floatValues[0]);
-					}
-					else if (floatCount > 1) {
-						// Vector channel.
-						Vector4 vectorValue = material.GetVector (parameter.ValueSlot);
-						for (int i = 0; i < floatCount; i++) {
-							vectorValue[i] = floatValues[i];
-						}
-						material.SetVector (parameter.ValueSlot, vectorValue);
-						DebugLog ("Setting " + mat.name + ": " + matProp.name + " to " + vectorValue);
-					}
+			if (parameter.sSlot != null)
+			{
+				if (matProp.vectorCount == 1)
+				{
+					// Scalar channel.
+					DebugLog("Setting " + mat.name + ": " + matProp.name + " to " + matProp.vector[0]);
+					material.SetFloat(parameter.sSlot, matProp.vector[0]);
+				}
+				else if (matProp.vectorCount > 1)
+				{
+					// Vector channel.
+					material.SetVector(parameter.sSlot, matProp.vector);
+					DebugLog("Setting " + mat.name + ": " + matProp.name + " to " + matProp.vector);
 				}
 			}
 		}
 
-		// Create the directory for the material - and the material asset - if it doesn't already exist.
-		if (!materialAlreadyExists) {
-			if (!Directory.Exists (importedMaterialPath) && !AssetDatabase.IsValidFolder (importedMaterialPath)) {
-				AssetDatabase.CreateFolder (assetDirectory, materialDir);
+		// Check to see if there are any conflicts with the Metallic/Albedo/Smoothness maps.
+		// Users might assign them arbitrarily in MODO, but Unity is much more fussy and wants the Smoothness to be derived from specific texture channels.
+		// In Unity 5.0, the Smoothness value is derived from the Alpha channel of the texture used for the Metallic value.
+		// As of Unity 5.4, the Smoothness value can optionally be derived from the Albedo texture's alpha channel instead.
+		{
+			// Check to see if the material already has either Metallic or Albedo texture applied and which texture it's deriving the smoothness from.
+			bool wantsAlbedoAlpha = (isAtLeastUnity5_4 && material.IsKeywordEnabled("_SMOOTHNESS_TEXTURE_ALBEDO_CHANNEL_A"));
+
+			MODOTexture metalTex = null;
+			MODOTexture albedoTex = null;
+			MODOTexture smoothTex = null;
+
+			// Find all the pending textures.
+			foreach (MODOTexture finalTexture in finalTextures)
+			{
+				if (finalTexture.name == "Metallic")
+					metalTex = finalTexture;
+
+				if (finalTexture.name == "Albedo")
+					albedoTex = finalTexture;
+
+				if (finalTexture.name == "Smoothness")
+					smoothTex = finalTexture;
+			}
+
+			bool noMetalTex = ((metalTex == null) || string.IsNullOrEmpty(metalTex.path));
+			bool noAlbedoTex = ((albedoTex == null) || string.IsNullOrEmpty(albedoTex.path));
+			bool noSmoothTex = ((smoothTex == null) || string.IsNullOrEmpty(smoothTex.path));
+
+			bool noPreviousMetalTexture = noMetalTex ? true : (metalTex.texture == null);
+			//bool noPreviousAlbedoTexture = noAlbedoTex ? true : (albedoTex.texture == null);
+
+			if (noSmoothTex)
+			{
+				// No smoothness map.
+				if (noMetalTex && noAlbedoTex)
+				{
+					// No Metallic or albedo textures either. No problem.
+				}
+				else if (wantsAlbedoAlpha) {
+					// The material wants the Albedo map Alpha as Smoothness.
+					if (!noAlbedoTex)
+					{
+						// There is an Albedo map. Warn the user it's going to look wrong.
+						if (pref_showWarnings)
+							warnings.Add("Smoothness will be taken from the Albedo texture's alpha channel.");
+						debugWarnings.Add("There is no Smoothness texture specified for " + mat.name + ".\nUnity is expecting to read the Smoothness value from the alpha channel of the Albedo texture.");
+					}
+					//else
+					//{
+					// No Albedo map anyway. No problem.
+					//}
+				}
+				else {
+					// The material wants the Metallic map Alpha as Smoothness.
+					if (!noMetalTex)
+					{
+						if (noPreviousMetalTexture)
+						{
+							// There is a Metallic map. Warn the user it's going to look wrong.
+							if (pref_showWarnings)
+								warnings.Add("Metallic value will be taken from the Smoothness texture's alpha channel.");
+							debugWarnings.Add("There is no Metallic texture specified for " + mat.name + ".\nUnity is expecting to read the Metallic value from the red channel of the Smoothness texture.");
+						}
+						else
+						{
+							// There is a Metallic map. Warn the user it's going to look wrong.
+							if (pref_showWarnings)
+								warnings.Add("Smoothness value will be taken from the Metallic texture's alpha channel.");
+							debugWarnings.Add("There is no Smoothness texture specified for " + mat.name + ".\nUnity is expecting to read the Smoothness value from the alpha channel of the Metallic texture.");
+						}
+					}
+					//else
+					//{
+					// No Metallic map anyway. No problem.
+					//}
+				}
+			}
+			else
+			{
+				// There is a Smoothness map.
+				bool smoothUsesMetal = smoothTex.path.Equals(metalTex.path, StringComparison.CurrentCultureIgnoreCase);
+				bool smoothUsesAlbedo = smoothTex.path.Equals(albedoTex.path, StringComparison.CurrentCultureIgnoreCase);
+
+				if (!smoothUsesMetal && !smoothUsesAlbedo)
+				{
+					// Smoothness map isn't driven by either Metallic or Albedo.
+
+					if (noMetalTex)
+					{
+						// There is no Metallic map. Warn the user it's going to look wrong.
+						if (pref_showWarnings)
+							warnings.Add("Metallic value will be taken from the Smoothness texture's red channel.");
+
+						debugWarnings.Add("There is no Metallic texture specified for " + mat.name + ".\nUnity is expecting to read the Metallic value from the red channel of the Smoothness texture.");
+					}
+					else
+					{
+						// There is a Metallic map. Warn the user it's going to look wrong.
+						if (pref_showWarnings)
+						{
+							if (isAtLeastUnity5_4)
+								warnings.Add("Smoothness value is not driven by the correct texture, must be from Metallic or Albedo texture.");
+							else
+								warnings.Add("Smoothness value is not driven by the correct texture, must be from Metallic texture.");
+						}
+
+						if (isAtLeastUnity5_4)
+							debugWarnings.Add("There is no Smoothness texture specified for " + mat.name + ".\nUnity is expecting to read the Smoothness value from the alpha channel of either the Albedo or the Metallic texture.");
+						else
+							debugWarnings.Add("There is no Smoothness texture specified for " + mat.name + ".\nUnity is expecting to read the Smoothness value from the alpha channel of the Metallic texture.");
+					}
+				}
+				else if (smoothUsesMetal)
+				{
+					// Smoothness uses Metallic.
+					if (wantsAlbedoAlpha)
+					{
+						// Set the shader to use that if Unity version supports that.
+						SetupMaterialUseAlbedoAlpha(material, false);
+						DebugLog("Setting " + mat.name + ": Take Smoothness value from Metallic texture alpha channel.");
+					}
+
+					// Smoothness is already using another texture, so clear it.
+					smoothTex.texture = null;
+					smoothTex.path = null;
+				}
+				else if (smoothUsesAlbedo && isAtLeastUnity5_4)
+				{
+					if (!wantsAlbedoAlpha)
+					{
+						// Smoothness uses Albedo and Unity version supports that.
+						SetupMaterialUseAlbedoAlpha(material, true);
+						DebugLog("Setting " + mat.name + ": Take Smoothness value from Albedo texture alpha channel.");
+					}
+
+					// Smoothness is already using another texture, so clear it.
+					smoothTex.texture = null;
+					smoothTex.path = null;
+				}
+				else
+				{
+					// Smoothness doesn't use Metallic and Unity version doesn't support anything else. Warn the user it's going to look wrong.
+					if (pref_showWarnings)
+						warnings.Add("Smoothness value is not driven by the correct texture.");
+					if (isAtLeastUnity5_4)
+						debugWarnings.Add("There is no Smoothness texture specified for " + mat.name + ".\nUnity is expecting to read the Smoothness value from either the alpha channel of the Albedo or the Metallic texture.");
+					else
+						debugWarnings.Add("There is no Smoothness texture specified for " + mat.name + ".\nUnity is expecting to read the Smoothness value from the alpha channel of the Metallic texture.");
+				}
+			}
+		}
+
+		// Assign any existing textures now.
+		foreach (MODOTexture finalTexture in finalTextures)
+		{
+			if (finalTexture.texture != null)
+			{
+				material.SetTexture(finalTexture.slot, finalTexture.texture);
+			}
+		}
+
+		// Create the directory for the material - and the material asset itself - if it doesn't already exist.
+		if (!materialAlreadyExists)
+		{
+			if (!Directory.Exists(importedMaterialPath) && !AssetDatabase.IsValidFolder(importedMaterialPath))
+			{
+				AssetDatabase.CreateFolder(assetDirectory, materialDir);
 			}
 			// Create the material itself.
-			AssetDatabase.CreateAsset (material, materialPath);
+			AssetDatabase.CreateAsset(material, materialPath);
+		}
+
+
+		// Display any warnings to the user.
+		if (pref_showWarnings && (warnings.Count > 0))
+		{
+			EditorUtility.DisplayDialog(
+			"Material Issues Detected with \"" + mat.name + "\"",
+			string.Join("\n\n", warnings.ToArray()) + "\n\nMaterials may not appear as expected!\n\nSee warning in Console for more details.",
+			"OK",
+			"");
+			warnings.Clear();
+		}
+
+		// Write full details out to the console.
+		// Display any warnings to the user.
+		if (debugWarnings.Count > 0)
+		{
+			Debug.LogWarning("Material Issues Detected with \"" + mat.name + "\"\n\n" + string.Join("\n\n", debugWarnings.ToArray()) + "\n\n");
+			debugWarnings.Clear();
 		}
 
 		// Return the material.
@@ -983,31 +1451,52 @@ public class MODOMaterialImporter : AssetPostprocessor {
 
 	// Handle any textures that weren't already imported at material creation time.
 	// Here we're just ensuring that textures going into normal map slots are set as normal maps.
-	void OnPreprocessTexture () {
-		if (!isUnity5) {
+	void OnPreprocessTexture()
+	{
+		if (!isAtLeastUnity5)
+		{
 			return;
 		}
 
 		// Get all the textures at the path of this one.
-		// Set them to be normal maps.
-		foreach (MODOMaterialPendingTexture pendingTexture in pendingTextures.getPendingTextures (assetPath)) {
-			if ((pendingTexture.textureSlot == "_BumpMap") || (pendingTexture.textureSlot == "_DetailNormalMap")) {
-				TextureImporter textureImporter = assetImporter as TextureImporter;
-				if (textureImporter.textureType != TextureImporterType.Bump) {
+		// Set them to be normal maps if they're meant to be.
+		// Set up their colorspace.
+		foreach (MODOMaterialPendingTexture pendingTexture in pendingTextures.getPendingTextures(assetPath))
+		{
+			TextureImporter textureImporter = assetImporter as TextureImporter;
+			if ((pendingTexture.texture.slot == "_BumpMap") || (pendingTexture.texture.slot == "_DetailNormalMap"))
+			{
+				if (textureImporter.textureType != TextureImporterType.Bump)
+				{
 					textureImporter.textureType = TextureImporterType.Bump;
+				}
+			}
+			else
+			{
+				if (pendingTexture.texture.colorspace == MODOColorspace.sRGB)
+				{
+					textureImporter.textureType = TextureImporterType.Image;
+				}
+				else if (pendingTexture.texture.colorspace == MODOColorspace.linear)
+				{
+					textureImporter.textureType = TextureImporterType.Advanced;
+					textureImporter.linearTexture = true;
 				}
 			}
 		}
 	}
 
 	// Handle any textures that weren't already imported at material creation time.
-	void OnPostprocessTexture (Texture texture) {
-		if (!isUnity5) {
+	void OnPostprocessTexture(Texture texture)
+	{
+		if (!isAtLeastUnity5)
+		{
 			return;
 		}
 		// Get all the textures at the path of this one.
 		// And tell them they're ready to be applied to their materials.
-		foreach (MODOMaterialPendingTexture pendingTexture in pendingTextures.getPendingTextures (assetPath)) {
+		foreach (MODOMaterialPendingTexture pendingTexture in pendingTextures.getPendingTextures(assetPath))
+		{
 			pendingTexture.state = MODOPendingState.ReadyToApply;
 		}
 		// The material will have the slot filled after loading has finished.
@@ -1019,69 +1508,173 @@ public class MODOMaterialImporter : AssetPostprocessor {
 	* POSTPROCESSOR
 	*/
 
-	static void OnPostprocessAllAssets(string[] importedAssets, string[] deletedAssets, string[] movedAssets, string[] movedFromAssetPaths) {
-		if (!isUnity5) {
+	static void OnPostprocessAllAssets(string[] importedAssets, string[] deletedAssets, string[] movedAssets, string[] movedFromAssetPaths)
+	{
+		if (!isAtLeastUnity5)
+		{
 			return;
 		}
+
+		pref_showWarnings = EditorPrefs.GetBool("MODOMaterialShowWarnings", true);
+
 		// Check to see if we've just imported a MODO Material XML file.
 		// If we have, and we haven't also just imported it's respective FBX file, then re-import the FBX file.
 		// That will force the AssetImporter to update the material values to whatever's been changed in this XML file.
-		foreach (var str in importedAssets) {
-			if (Path.GetExtension(str) == ".xml") {
+		foreach (var str in importedAssets)
+		{
+			if (Path.GetExtension(str) == ".xml")
+			{
 				MODOMaterialContainer matContainer = LoadMaterialXMLFromPath(str);
-				if (matContainer != null) {
+				if (matContainer != null)
+				{
 					string modelPath = Path.Combine(Path.GetDirectoryName(str), Path.GetFileNameWithoutExtension(str) + ".fbx");
-					if ((!importedAssets.Contains(modelPath)) && (AssetDatabase.LoadAssetAtPath(modelPath, typeof(GameObject)) != null)) {
-						AssetDatabase.ImportAsset(modelPath, ImportAssetOptions.ForceUpdate);
-						DebugLog("Reimporting model.");
+					if (importedAssets.Contains(modelPath))
+					{
+						DebugLog("FBX was just (re)imported with this XML file, so not (re)importing it.");
 					}
-					else {
-						DebugLog("Model was just reimported with this XML file, so not reimporting.");
+					else
+					{
+						if (AssetDatabase.LoadAssetAtPath(modelPath, typeof(GameObject)) != null)
+						{
+							AssetDatabase.ImportAsset(modelPath, ImportAssetOptions.ForceUpdate);
+							DebugLog("Reimporting FBX file for XML.");
+						}
+						else
+						{
+							DebugWarning("MODO Material XML file imported without corresponding FBX mesh.\n" + modelPath + " is missing.");
+							if (pref_showWarnings)
+							{
+								EditorUtility.DisplayDialog(
+								"Missing FBX for Material",
+								"MODO Material XML file imported without corresponding FBX mesh.\n\"" + Path.Combine(Directory.GetCurrentDirectory(), modelPath) + "\" is missing.",
+								"OK",
+								"");
+							}
+						}
 					}
 				}
 			}
 		}
 	}
-	#endif
+#endif
+
+	// Add default preferences to the Preferences Window.
+	[PreferenceItem("MODO Importer")]
+	public static void PreferencesGUI()
+	{
+		// Load the preferences
+		pref_alwaysApply = EditorPrefs.GetBool("MODOMaterialAlwaysApply", true);
+		pref_alwaysImport = EditorPrefs.GetBool("MODOMaterialAlwaysImport", false);
+		pref_showWarnings = EditorPrefs.GetBool("MODOMaterialShowWarnings", true);
+		pref_debug = EditorPrefs.GetBool("MODOMaterialDebug", false);
+
+		// Preferences GUI
+		EditorGUILayout.LabelField("Default Settings", EditorStyles.boldLabel);
+		pref_alwaysApply = EditorGUILayout.Toggle("Force Update Materials", pref_alwaysApply);
+		EditorGUI.BeginDisabledGroup(pref_alwaysApply == false);
+		pref_alwaysImport = EditorGUILayout.Toggle("Force Texture Import", pref_alwaysImport);
+		EditorGUI.EndDisabledGroup();
+		pref_showWarnings = EditorGUILayout.Toggle("Show Importer Warnings", pref_showWarnings);
+		pref_debug = EditorGUILayout.Toggle("Debug", pref_debug);
+
+		// Save the preferences
+		if (GUI.changed)
+		{
+			EditorPrefs.SetBool("MODOMaterialAlwaysApply", pref_alwaysApply);
+			EditorPrefs.SetBool("MODOMaterialAlwaysImport", pref_alwaysImport);
+			EditorPrefs.SetBool("MODOMaterialDebug", pref_debug);
+			EditorPrefs.SetBool("MODOMaterialShowWarnings", pref_showWarnings);
+		}
+	}
 
 	// Make a nicer Inspector for the MODO Material XML file.
 	// Default to the Default Inspector if it's not a MODO Material XML file.
 	[CustomEditor(typeof(TextAsset))]
-	public class TextAssetEditor : Editor {
+	public class TextAssetEditor : Editor
+	{
 
-		#if MODO_COMPATIBLE_UNITY_VERSION
-		bool showVersion	= false;
+#if MODO_COMPATIBLE_UNITY_VERSION
+		bool showVersion = false;
 		List<bool> toggles = new List<bool>();
-		#endif
+		int optionApplyIndex = 0;
+		int optionImportIndex = 0;
+#endif
 
-		public void showContent (TextAsset textAsset) {
-			EditorGUILayout.TextArea (textAsset.text, GUILayout.ExpandHeight (true), GUILayout.ExpandWidth (true));
+		public void showContent(TextAsset textAsset)
+		{
+			EditorGUILayout.TextArea(textAsset.text, GUILayout.ExpandHeight(true), GUILayout.ExpandWidth(true));
 		}
 
-		public override void OnInspectorGUI() {
+		public override void OnInspectorGUI()
+		{
 
 			TextAsset textAsset = target as TextAsset;
 			MODOMaterialContainer matContainer = LoadMaterialXMLFromString(textAsset.text);
-			if (matContainer == null) {
-				showContent (textAsset);
+			if (matContainer == null)
+			{
+				showContent(textAsset);
 			}
-			else {
-				#if MODO_COMPATIBLE_UNITY_VERSION
+			else
+			{
+#if MODO_COMPATIBLE_UNITY_VERSION
 				// Enable the GUI so you can toggle bits and pieces.
 				GUI.enabled = true;
 
-				EditorGUILayout.LabelField("Global MODO Material Importer Settings", EditorStyles.boldLabel);
-				alwaysApply = EditorGUILayout.Toggle("Always Update Materials", alwaysApply);
-				EditorGUI.BeginDisabledGroup (alwaysApply == false);
-				alwaysImport = EditorGUILayout.Toggle("Always Reimport External Textures", alwaysImport);
-				EditorGUI.EndDisabledGroup ();
-				debug = EditorGUILayout.Toggle("Show Debug Info", debug);
+				// Get the tags on the file - this stores the per-file import preferences, if any.
+				optionApplyIndex = 0;
+				optionImportIndex = 0;
+				bool pref_alwaysApply = EditorPrefs.GetBool("MODOMaterialAlwaysApply", true);
+				bool pref_alwaysImport = EditorPrefs.GetBool("MODOMaterialAlwaysImport", false);
+				string[] labels = AssetDatabase.GetLabels(textAsset);
+				if (labels.Length > 0)
+				{
+					foreach (string label in labels)
+					{
+						if (label.ToLowerInvariant() == "MODOAlwaysApply".ToLowerInvariant())
+						{
+							optionApplyIndex = 1;
+						}
+						else if (label.ToLowerInvariant() == "MODODontApply".ToLowerInvariant())
+						{
+							optionApplyIndex = 2;
+						}
+						else if (label.ToLowerInvariant() == "MODOAlwaysImport".ToLowerInvariant())
+						{
+							optionImportIndex = 1;
+						}
+						else if (label.ToLowerInvariant() == "MODODontImport".ToLowerInvariant())
+						{
+							optionImportIndex = 2;
+						}
+					}
+				}
 
-				EditorGUILayout.Separator();
+				string[] applyOptions = new string[] { "Default", "Always Update", "Don't Update" };
+				applyOptions[0] += " (" + applyOptions[(pref_alwaysApply) ? 1 : 2] + ")";
+				string[] importOptions = new string[] { "Default", "Always Import", "Don't Import" };
+				importOptions[0] += " (" + importOptions[(pref_alwaysImport) ? 1 : 2] + ")";
 
-				EditorGUILayout.LabelField("MODO Material File", EditorStyles.boldLabel);
+				EditorGUILayout.LabelField("MODO Material Importer Settings", EditorStyles.boldLabel);
+				optionApplyIndex = EditorGUILayout.Popup("Material Import", optionApplyIndex, applyOptions);
+				optionImportIndex = EditorGUILayout.Popup("Texture Import", optionImportIndex, importOptions);
 
-				if (GUILayout.Button("Force Reimport (using Global Settings)")) {
+				if (GUILayout.Button("Set As Defaults"))
+				{
+					if (optionApplyIndex > 0)
+					{
+						EditorPrefs.SetBool("MODOMaterialAlwaysApply", (optionApplyIndex == 1));
+						optionApplyIndex = 0;
+					}
+					if (optionImportIndex > 0)
+					{
+						EditorPrefs.SetBool("MODOMaterialAlwaysImport", (optionImportIndex == 1));
+						optionImportIndex = 0;
+					}
+					GUI.changed = true;
+				}
+
+				if (GUILayout.Button("Reimport"))
+				{
 					string assetPath = AssetDatabase.GetAssetPath(target);
 					AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceUpdate);
 				}
@@ -1090,52 +1683,107 @@ public class MODOMaterialImporter : AssetPostprocessor {
 
 				EditorGUILayout.LabelField("MODO Material File Contents", EditorStyles.boldLabel);
 
-				if (matContainer.useRootPath == 1) {
+				if (matContainer.useRootPath == 1)
+				{
 					EditorGUILayout.LabelField("Root Texture Path: " + matContainer.rootPath);
 				}
 
 				for (int i = toggles.Count; i < matContainer.materials.Count; i++) { toggles.Add(false); }
 				int toggleIdx = 0;
-				foreach (MODOMaterial mat in matContainer.materials) {
+				foreach (MODOMaterial mat in matContainer.materials)
+				{
 					toggles[toggleIdx] = EditorGUILayout.Foldout(toggles[toggleIdx], mat.name);
-					if (toggles[toggleIdx]) {
-						foreach (MaterialParameter parameter in materialParameters) {
-							MODOMaterialProperty matProp = mat.getProperty(parameter.Property);
-							if (matProp != null) {
+					if (toggles[toggleIdx])
+					{
+						foreach (MaterialParameter param in materialParams)
+						{
+							MODOMaterialProperty matProp = mat.getProperty(param.name);
+							if (matProp != null)
+							{
 								if (
-									((matProp.numTextures() > 0) && (parameter.Slot != null))
+									((matProp.numTextures() > 0) && (param.tSlot != null))
 									||
-									((matProp.value != null) && (parameter.ValueSlot != null))
+									((matProp.value != null) && (param.sSlot != null))
 									)
 								{
+
 									EditorGUILayout.BeginVertical();
 									EditorGUILayout.LabelField(matProp.name, EditorStyles.boldLabel);
 
-									if ((parameter.Slot != null) && (matProp.numTextures() > 0)) {
-										foreach (MODOMaterialPropertyTexture matPropTexture in matProp.textures) {
+									EditorGUI.indentLevel++;
+
+									if (param.name == "Albedo")
+									{
+										EditorGUI.BeginDisabledGroup(true);
+#if UNITY_5_3_OR_NEWER
+										EditorGUILayout.ColorField(new GUIContent("Albedo Color"), mat.getDiffuseColor(), false, false, false, null);
+#else
+										EditorGUILayout.ColorField(new GUIContent("Albedo Color"), mat.getDiffuseColor());
+#endif
+										EditorGUI.EndDisabledGroup();
+									}
+									else if (param.name == "Emission")
+									{
+										EditorGUI.BeginDisabledGroup(true);
+#if UNITY_5_3_OR_NEWER
+										EditorGUILayout.ColorField(new GUIContent("Emissive Color"), mat.getEmissiveColor(), false, false, true, new ColorPickerHDRConfig(0.0f, 99.0f, 0.0f, 99.0f));
+#else
+										EditorGUILayout.ColorField(new GUIContent("Albedo Color"), mat.getDiffuseColor());
+#endif
+										EditorGUI.EndDisabledGroup();
+									}
+
+									if ((param.tSlot != null) && (matProp.numTextures() > 0))
+									{
+										foreach (MODOMaterialPropertyTexture matPropTexture in matProp.textures)
+										{
 											EditorGUILayout.BeginVertical();
-											EditorGUILayout.LabelField(matPropTexture.name);
-											if (matPropTexture.filename != null) {
-												EditorGUILayout.LabelField("Texture", matPropTexture.filename);
+											EditorGUILayout.LabelField("Texture Name", matPropTexture.name);
+											string textureFilename = null;
+											string textureFilepath = null;
+											MODOColorspace textureColorspace = MODOColorspace.sRGB;
+											if ((matPropTexture.imageIndex > -1) && (matPropTexture.imageIndex < matContainer.images.files.Count))
+											{
+												textureFilepath = matContainer.images.files[matPropTexture.imageIndex].file;
+												textureColorspace = matContainer.images.files[matPropTexture.imageIndex].colorspace;
 											}
-											if ((matPropTexture.wrapU != null) && (matPropTexture.wrapV != null)) {
-												EditorGUILayout.LabelField("Tiling", matPropTexture.wrapU + ", " + matPropTexture.wrapV);
+											else if (!string.IsNullOrEmpty(matPropTexture.filename))
+											{
+												textureFilepath = matPropTexture.filename;
 											}
-											else if (matPropTexture.wrapU != null) {
-												EditorGUILayout.LabelField("Tiling U", matPropTexture.wrapU);
-											}
-											else if (matPropTexture.wrapV != null) {
-												EditorGUILayout.LabelField("Tiling V", matPropTexture.wrapV);
-											}
-											if (matPropTexture.uvmap != null) {
-												EditorGUILayout.LabelField("UVMap", matPropTexture.uvmap);
+											if (!string.IsNullOrEmpty(textureFilepath))
+											{
+												textureFilename = Path.GetFileName(textureFilepath);
+												EditorGUILayout.LabelField("Texture", textureFilename);
+
+												if (textureColorspace == MODOColorspace.sRGB)
+													EditorGUILayout.LabelField("Colorspace", "sRGB");
+												else
+													EditorGUILayout.LabelField("Colorspace", "Linear");
+
+												if ((matPropTexture.wrapU != 1.0f) || (matPropTexture.wrapV != 1.0f))
+													EditorGUILayout.LabelField("Tiling", matPropTexture.wrapU + ", " + matPropTexture.wrapV);
+
+												if (matPropTexture.uvmap != MODOUVMap.UV1)
+													EditorGUILayout.LabelField("Secondary UV Map");
 											}
 											EditorGUILayout.EndVertical();
 										}
 									}
-									if ((parameter.ValueSlot != null) && (matProp.value != null)) {
-										EditorGUILayout.LabelField("Numeric Value", matProp.value);
+									if ((param.sSlot != null) && (matProp.vectorCount > 0))
+									{
+										if (matProp.vectorCount > 1)
+										{
+											EditorGUI.BeginDisabledGroup(true);
+											EditorGUILayout.ColorField(matProp.vector);
+											EditorGUI.EndDisabledGroup();
+										}
+										else
+										{
+											EditorGUILayout.LabelField("Value", matProp.value);
+										}
 									}
+									EditorGUI.indentLevel--;
 									EditorGUILayout.EndVertical();
 								}
 							}
@@ -1145,15 +1793,20 @@ public class MODOMaterialImporter : AssetPostprocessor {
 				}
 
 				EditorGUILayout.Separator();
-				if (debug) {
+				pref_debug = EditorGUILayout.Toggle("Show Debug Info", pref_debug);
+				if (pref_debug)
+				{
 					EditorGUILayout.Separator();
-					showVersion = EditorGUILayout.Foldout(showVersion, "Debug Info");
-					if (showVersion) {
+					showVersion = EditorGUILayout.Foldout(showVersion, "Version Info");
+					if (showVersion)
+					{
 						EditorGUILayout.BeginVertical();
-						if (matContainer.MODOversion != null) {
+						if (matContainer.MODOversion != null)
+						{
 							EditorGUILayout.LabelField("App: " + matContainer.MODOversion.app);
 							EditorGUILayout.LabelField("Version: " + matContainer.MODOversion.version);
 							EditorGUILayout.LabelField("Build: " + matContainer.MODOversion.build);
+							EditorGUILayout.LabelField("XML Version: " + matContainer.MODOversion.versionXML);
 						}
 						EditorGUILayout.EndVertical();
 					}
@@ -1161,13 +1814,40 @@ public class MODOMaterialImporter : AssetPostprocessor {
 
 				if (GUI.changed)
 				{
-					EditorPrefs.SetBool("MODOMaterialAlwaysApply", alwaysApply);
-					EditorPrefs.SetBool("MODOMaterialAlwaysImport", alwaysImport);
-					EditorPrefs.SetBool("MODOMaterialDebug", debug);
+					// Get the tags on the file - this stores the per-file import preferences, if any.
+					List<string> newLabels = new List<string>();
+					if (labels.Length > 0)
+					{
+						foreach (string label in labels)
+						{
+							if (label.ToLowerInvariant() == "MODOAlwaysApply".ToLowerInvariant())
+								continue;
+							if (label.ToLowerInvariant() == "MODOAlwaysImport".ToLowerInvariant())
+								continue;
+							if (label.ToLowerInvariant() == "MODODontApply".ToLowerInvariant())
+								continue;
+							if (label.ToLowerInvariant() == "MODODontImport".ToLowerInvariant())
+								continue;
+							newLabels.Add(label);
+						}
+					}
+
+					if (optionApplyIndex == 1)
+						newLabels.Add("MODOAlwaysApply");
+					else if (optionApplyIndex == 2)
+						newLabels.Add("MODODontApply");
+					if (optionImportIndex == 1)
+						newLabels.Add("MODOAlwaysImport");
+					else if (optionImportIndex == 2)
+						newLabels.Add("MODODontImport");
+
+					AssetDatabase.SetLabels(textAsset, newLabels.ToArray<string>());
+
+					EditorPrefs.SetBool("MODOMaterialDebug", pref_debug);
 				}
-				#else
-					EditorGUILayout.LabelField ("MODO Material Importer is for Unity 5+ Only", EditorStyles.boldLabel);
-				#endif
+#else
+										EditorGUILayout.LabelField ("MODO Material Importer is for Unity 5+ Only", EditorStyles.boldLabel);
+#endif
 			}
 		}
 	}
